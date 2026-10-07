@@ -1,0 +1,151 @@
+import type {
+  FairnessResult,
+  Health,
+  PlanRequest,
+  PlanResult,
+  RainEventResult,
+  RunRow,
+  SeasonEvent,
+  SeasonRequest,
+  SensitivityResult,
+} from './types'
+
+const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? ''
+
+export class ApiUnavailable extends Error {}
+
+async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 30000)
+  const onAbort = () => ctrl.abort()
+  init.signal?.addEventListener('abort', onAbort)
+  try {
+    const res = await fetch(`${BASE}${path}`, { ...init, signal: ctrl.signal })
+    if (res.status >= 500 || res.status === 404 || res.status === 502 || res.status === 503) {
+      throw new ApiUnavailable(`API ${res.status}`)
+    }
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`API ${res.status}: ${body.slice(0, 200)}`)
+    }
+    const type = res.headers.get('content-type') ?? ''
+    if (!type.includes('application/json')) throw new ApiUnavailable('API returned non-JSON (static host?)')
+    return (await res.json()) as T
+  } catch (err) {
+    if (init.signal?.aborted) throw err
+    if (err instanceof ApiUnavailable) throw err
+    if (err instanceof TypeError || (err as Error).name === 'AbortError') throw new ApiUnavailable(String(err))
+    throw err
+  } finally {
+    clearTimeout(timer)
+    init.signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+let healthPromise: Promise<Health | null> | null = null
+let healthAt = 0
+
+export function health(force = false): Promise<Health | null> {
+  if (!force && healthPromise && Date.now() - healthAt < 30000) return healthPromise
+  healthAt = Date.now()
+  healthPromise = request<Health>('/api/health', { timeoutMs: 4000 }).catch(() => null)
+  return healthPromise
+}
+
+const post = <T>(path: string, body: unknown, signal?: AbortSignal, timeoutMs = 45000) =>
+  request<T>(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+    timeoutMs,
+  })
+
+/** Run a request on the CP-SAT API; fall back to the browser engine only if the API is unreachable. */
+async function withFallback<T>(apiCall: () => Promise<T>, browserCall: () => Promise<T>): Promise<{ data: T; engine: 'cp-sat' | 'heuristic' }> {
+  const h = await health()
+  if (h) {
+    try {
+      return { data: await apiCall(), engine: 'cp-sat' }
+    } catch (err) {
+      if (!(err instanceof ApiUnavailable)) throw err
+      healthPromise = Promise.resolve(null)
+    }
+  }
+  return { data: await browserCall(), engine: 'heuristic' }
+}
+
+const browser = () => import('@/engine/plan')
+
+export function plan(req: PlanRequest, signal?: AbortSignal) {
+  return withFallback<PlanResult>(
+    () => post('/api/plan', req, signal),
+    async () => (await browser()).planInBrowser(req, signal),
+  )
+}
+
+export function sensitivity(req: PlanRequest, signal?: AbortSignal) {
+  return withFallback<SensitivityResult>(
+    () => post('/api/sensitivity', { ...req, persist: false }, signal),
+    async () => (await browser()).sensitivityInBrowser(req),
+  )
+}
+
+export function fairness(req: PlanRequest, signal?: AbortSignal) {
+  return withFallback<FairnessResult>(
+    () => post('/api/fairness', { ...req, persist: false }, signal),
+    async () => (await browser()).fairnessInBrowser(req),
+  )
+}
+
+export function rainEvent(req: PlanRequest & { forecastSlot?: number }, signal?: AbortSignal) {
+  return withFallback<RainEventResult>(
+    () => post('/api/rain-event', { ...req, persist: false }, signal),
+    async () => (await browser()).rainEventInBrowser(req, req.forecastSlot ?? 20),
+  )
+}
+
+export async function runs(limit = 12): Promise<RunRow[]> {
+  try {
+    return await request<RunRow[]>(`/api/runs?limit=${limit}`, { timeoutMs: 5000 })
+  } catch {
+    return []
+  }
+}
+
+/** Stream a season simulation (server-sent events over a POST). */
+export async function season(
+  req: SeasonRequest,
+  onEvent: (e: SeasonEvent) => void,
+  signal?: AbortSignal,
+): Promise<'cp-sat' | 'heuristic'> {
+  const h = await health()
+  if (!h) {
+    const { simulateSeasonInBrowser } = await import('@/engine/season')
+    await simulateSeasonInBrowser(req, onEvent, signal)
+    return 'heuristic'
+  }
+  const res = await fetch(`${BASE}/api/season`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(`Season API ${res.status}`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      const line = chunk.split('\n').find((l) => l.startsWith('data: '))
+      if (line) onEvent(JSON.parse(line.slice(6)) as SeasonEvent)
+    }
+  }
+  return 'cp-sat'
+}

@@ -1,0 +1,17 @@
+# Render Blueprint: one Docker web service plus a managed PostgreSQL database.
+services:
+  - type: web
+    name: sunshift
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sunshift-db
+          property: connectionString
+
+databases:
+  - name: sunshift-db
+    databaseName: sunshift
+    user: sunshift

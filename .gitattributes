@@ -1,0 +1,6 @@
+# Keep LF line endings everywhere (the Docker image and CI run on Linux).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff binary
+*.woff2 binary

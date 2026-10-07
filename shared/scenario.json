@@ -1,0 +1,372 @@
+{
+  "version": 1,
+  "note": "Hypothetical 20-farm solarised agricultural feeder used for demonstration. Farms, pumps and layout are simulated; weather and solar inputs can be live (Open-Meteo) or replayed (ERA5). Crop and soil parameters follow FAO-56 tables.",
+  "feeder": {
+    "id": "F07",
+    "name": "Feeder 07",
+    "pv_kwp": 120,
+    "inverter_kw": 95,
+    "feeder_limit_kw": 60,
+    "grid_backup_kw": 15,
+    "tilt_deg": 15,
+    "azimuth_deg": 180,
+    "system_losses": 0.14,
+    "gamma_pdc": -0.0037,
+    "slot_minutes": 15,
+    "day_start_hour": 6,
+    "slots": 48,
+    "min_run_slots": 2,
+    "max_starts": 2
+  },
+  "pump_model": {
+    "motor_efficiency": 0.78,
+    "wire_to_water_efficiency": 0.38,
+    "note": "Discharge is estimated from rated power, borewell head and an assumed wire-to-water efficiency typical of Indian agricultural pumpsets. No flow meters in the simulation."
+  },
+  "policy": {
+    "rain_defer_prob": 50,
+    "rain_min_mm": 2.0,
+    "rain_lookahead_h": 30,
+    "observed_rain_skip_mm": 10,
+    "fairness_weight": 1.0,
+    "catch_up_rate": 0.35,
+    "bau": {
+      "factor": 1.3,
+      "rotation_days": {
+        "drip": 1,
+        "sprinkler": 2,
+        "furrow": 3
+      },
+      "note": "Business-as-usual: farmers know their crop stage and the season, but not this week's weather or each other's schedules. Each irrigation applies factor x the climatological crop need for the month on a fixed rotation, starts at the farmer's habitual time, and is skipped only after observing heavy rain. Over-application under flat-rate agricultural power is widely reported; the factor is adjustable."
+    }
+  },
+  "locations": [
+    {
+      "id": "warangal",
+      "name": "Warangal",
+      "state": "Telangana",
+      "lat": 17.97,
+      "lon": 79.59,
+      "elevation_m": 267
+    },
+    {
+      "id": "anantapur",
+      "name": "Anantapur",
+      "state": "Andhra Pradesh",
+      "lat": 14.68,
+      "lon": 77.6,
+      "elevation_m": 350
+    },
+    {
+      "id": "jalna",
+      "name": "Jalna",
+      "state": "Maharashtra",
+      "lat": 19.84,
+      "lon": 75.88,
+      "elevation_m": 495
+    },
+    {
+      "id": "rajkot",
+      "name": "Rajkot",
+      "state": "Gujarat",
+      "lat": 22.3,
+      "lon": 70.8,
+      "elevation_m": 134
+    }
+  ],
+  "default_location": "warangal",
+  "seasons": [
+    {
+      "id": "rabi-2025",
+      "label": "Rabi 2025–26",
+      "start": "2025-11-01",
+      "note": "Dry season, irrigation-dominant"
+    },
+    {
+      "id": "summer-2026",
+      "label": "Summer 2026",
+      "start": "2026-03-01",
+      "note": "Peak heat, energy scarcity"
+    },
+    {
+      "id": "kharif-2026",
+      "label": "Kharif 2026",
+      "start": "2026-06-24",
+      "note": "Monsoon, rain-aware deferral"
+    }
+  ],
+  "crops": {
+    "cotton": {
+      "label": "Cotton",
+      "kc": [
+        0.35,
+        1.15,
+        0.7
+      ],
+      "stages": [
+        30,
+        50,
+        60,
+        55
+      ],
+      "zr": [
+        0.3,
+        1.2
+      ],
+      "p": 0.65,
+      "ky": 0.85,
+      "stage_labels": [
+        "Establishment",
+        "Squaring",
+        "Flowering & boll formation",
+        "Boll opening"
+      ],
+      "stage_ky": [
+        0.2,
+        0.3,
+        0.5,
+        0.25
+      ]
+    },
+    "maize": {
+      "label": "Maize",
+      "kc": [
+        0.3,
+        1.2,
+        0.6
+      ],
+      "stages": [
+        20,
+        35,
+        40,
+        30
+      ],
+      "zr": [
+        0.3,
+        1.0
+      ],
+      "p": 0.55,
+      "ky": 1.25,
+      "stage_labels": [
+        "Emergence",
+        "Vegetative",
+        "Tasselling & silking",
+        "Grain fill"
+      ],
+      "stage_ky": [
+        0.4,
+        0.4,
+        1.5,
+        0.5
+      ]
+    },
+    "groundnut": {
+      "label": "Groundnut",
+      "kc": [
+        0.4,
+        1.15,
+        0.6
+      ],
+      "stages": [
+        25,
+        35,
+        45,
+        25
+      ],
+      "zr": [
+        0.3,
+        0.6
+      ],
+      "p": 0.5,
+      "ky": 0.7,
+      "stage_labels": [
+        "Emergence",
+        "Vegetative",
+        "Pegging & pod formation",
+        "Pod maturity"
+      ],
+      "stage_ky": [
+        0.2,
+        0.2,
+        0.8,
+        0.6
+      ]
+    },
+    "chilli": {
+      "label": "Chilli",
+      "kc": [
+        0.6,
+        1.05,
+        0.9
+      ],
+      "stages": [
+        30,
+        40,
+        80,
+        30
+      ],
+      "zr": [
+        0.25,
+        0.6
+      ],
+      "p": 0.3,
+      "ky": 1.1,
+      "stage_labels": [
+        "Transplant establishment",
+        "Vegetative",
+        "Flowering & fruiting",
+        "Picking"
+      ],
+      "stage_ky": [
+        0.4,
+        0.6,
+        1.1,
+        0.8
+      ]
+    }
+  },
+  "excluded_crops": {
+    "paddy": "Paddy needs a ponded-water balance (puddling, percolation, standing water depth) rather than a root-zone depletion model, so it is out of scope for this MVP."
+  },
+  "soils": {
+    "red_sandy_loam": {
+      "label": "Red sandy loam",
+      "fc": 0.2,
+      "wp": 0.09
+    },
+    "black_clay": {
+      "label": "Black cotton soil",
+      "fc": 0.38,
+      "wp": 0.22
+    },
+    "loam": {
+      "label": "Loam",
+      "fc": 0.27,
+      "wp": 0.12
+    },
+    "sandy": {
+      "label": "Sandy soil",
+      "fc": 0.14,
+      "wp": 0.06
+    },
+    "clay_loam": {
+      "label": "Clay loam",
+      "fc": 0.32,
+      "wp": 0.17
+    }
+  },
+  "methods": {
+    "drip": {
+      "label": "Drip",
+      "efficiency": 0.9,
+      "trigger_frac_raw": 0.35,
+      "max_daily_hours": 5,
+      "target_frac_raw": 0.15
+    },
+    "sprinkler": {
+      "label": "Sprinkler",
+      "efficiency": 0.75,
+      "trigger_frac_raw": 0.65,
+      "max_daily_hours": 6,
+      "target_frac_raw": 0.3
+    },
+    "furrow": {
+      "label": "Furrow",
+      "efficiency": 0.6,
+      "trigger_frac_raw": 0.85,
+      "max_daily_hours": 7,
+      "target_frac_raw": 0.4
+    }
+  },
+  "layout": {
+    "unit_m": 12,
+    "solar_plant": {
+      "center": [
+        -41,
+        0
+      ],
+      "size": [
+        14,
+        24
+      ]
+    },
+    "substation": [
+      -29,
+      0
+    ],
+    "trunk": [
+      [
+        -29,
+        0
+      ],
+      [
+        47,
+        0
+      ]
+    ],
+    "branches": [
+      [
+        [
+          16,
+          0
+        ],
+        [
+          16,
+          -33
+        ]
+      ],
+      [
+        [
+          33,
+          0
+        ],
+        [
+          33,
+          -22
+        ]
+      ],
+      [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          31
+        ]
+      ],
+      [
+        [
+          31,
+          0
+        ],
+        [
+          31,
+          24
+        ]
+      ]
+    ]
+  },
+  "farms": [
+    {"id": 1, "crop": "cotton", "area_ha": 0.9, "soil": "black_clay", "pump_hp": 5, "head_m": 45, "method": "furrow", "das": 98, "dr0_frac": 0.48, "available": [[6, 18]], "habit_start": "07:00", "last_irrigated_days": 4, "served_yesterday": 1.0, "pos": [-19, -9]},
+    {"id": 2, "crop": "cotton", "area_ha": 0.8, "soil": "black_clay", "pump_hp": 5, "head_m": 50, "method": "furrow", "das": 102, "dr0_frac": 0.56, "available": [[6, 18]], "habit_start": "07:15", "last_irrigated_days": 5, "served_yesterday": 1.0, "pos": [-8, -10]},
+    {"id": 3, "crop": "chilli", "area_ha": 0.5, "soil": "red_sandy_loam", "pump_hp": 3, "head_m": 35, "method": "drip", "das": 48, "dr0_frac": 0.42, "available": [[6, 13]], "habit_start": "06:45", "last_irrigated_days": 1, "served_yesterday": 1.0, "pos": [3, -8]},
+    {"id": 4, "crop": "maize", "area_ha": 0.7, "soil": "loam", "pump_hp": 5, "head_m": 40, "method": "furrow", "das": 55, "dr0_frac": 0.5, "available": [[8, 18]], "habit_start": "08:00", "last_irrigated_days": 3, "served_yesterday": 1.0, "pos": [-19, 10]},
+    {"id": 5, "crop": "groundnut", "area_ha": 0.6, "soil": "sandy", "pump_hp": 3, "head_m": 30, "method": "sprinkler", "das": 22, "dr0_frac": 0.38, "available": [[6, 18]], "habit_start": "07:30", "last_irrigated_days": 2, "served_yesterday": 1.0, "pos": [-9, 10]},
+    {"id": 6, "crop": "cotton", "area_ha": 1.2, "soil": "black_clay", "pump_hp": 7.5, "head_m": 60, "method": "furrow", "das": 95, "dr0_frac": 0.6, "available": [[6, 18]], "habit_start": "07:00", "last_irrigated_days": 6, "served_yesterday": 1.0, "pos": [8, 11]},
+    {"id": 7, "crop": "cotton", "area_ha": 1.2, "soil": "red_sandy_loam", "pump_hp": 5, "head_m": 48, "method": "drip", "das": 100, "dr0_frac": 0.62, "available": [[6, 18]], "habit_start": "08:00", "last_irrigated_days": 3, "served_yesterday": 1.0, "pos": [6, -21]},
+    {"id": 8, "crop": "chilli", "area_ha": 0.8, "soil": "red_sandy_loam", "pump_hp": 5, "head_m": 42, "method": "drip", "das": 52, "dr0_frac": 0.5, "available": [[6, 18]], "habit_start": "07:15", "last_irrigated_days": 1, "served_yesterday": 1.0, "pos": [26, -9]},
+    {"id": 9, "crop": "maize", "area_ha": 0.8, "soil": "clay_loam", "pump_hp": 5, "head_m": 45, "method": "furrow", "das": 60, "dr0_frac": 0.44, "available": [[6, 18]], "habit_start": "08:15", "last_irrigated_days": 4, "served_yesterday": 0.55, "pos": [26, -21]},
+    {"id": 10, "crop": "groundnut", "area_ha": 0.6, "soil": "red_sandy_loam", "pump_hp": 3, "head_m": 30, "method": "sprinkler", "das": 18, "dr0_frac": 0.3, "available": [[9, 18]], "habit_start": "09:30", "last_irrigated_days": 2, "served_yesterday": 1.0, "pos": [6, -32]},
+    {"id": 11, "crop": "cotton", "area_ha": 0.9, "soil": "black_clay", "pump_hp": 5, "head_m": 55, "method": "furrow", "das": 92, "dr0_frac": 0.36, "available": [[6, 18]], "habit_start": "07:45", "last_irrigated_days": 3, "served_yesterday": 1.0, "pos": [26, -32]},
+    {"id": 12, "crop": "chilli", "area_ha": 0.8, "soil": "loam", "pump_hp": 5, "head_m": 40, "method": "drip", "das": 45, "dr0_frac": 0.46, "available": [[6, 14]], "habit_start": "07:00", "last_irrigated_days": 1, "served_yesterday": 1.0, "pos": [-8, 20]},
+    {"id": 13, "crop": "maize", "area_ha": 1.1, "soil": "loam", "pump_hp": 7.5, "head_m": 50, "method": "furrow", "das": 58, "dr0_frac": 0.55, "available": [[6, 18]], "habit_start": "08:30", "last_irrigated_days": 5, "served_yesterday": 1.0, "pos": [8, 23]},
+    {"id": 14, "crop": "cotton", "area_ha": 1.2, "soil": "black_clay", "pump_hp": 7.5, "head_m": 65, "method": "furrow", "das": 105, "dr0_frac": 0.52, "available": [[6, 18]], "habit_start": "07:30", "last_irrigated_days": 6, "served_yesterday": 1.0, "pos": [40, -10]},
+    {"id": 15, "crop": "groundnut", "area_ha": 0.5, "soil": "sandy", "pump_hp": 3, "head_m": 28, "method": "sprinkler", "das": 25, "dr0_frac": 0.5, "available": [[6, 18]], "habit_start": "08:00", "last_irrigated_days": 3, "served_yesterday": 0.7, "pos": [40, -21]},
+    {"id": 16, "crop": "chilli", "area_ha": 0.4, "soil": "red_sandy_loam", "pump_hp": 3, "head_m": 35, "method": "drip", "das": 40, "dr0_frac": 0.55, "available": [[7, 12], [14, 18]], "habit_start": "07:15", "last_irrigated_days": 1, "served_yesterday": 1.0, "pos": [-7, 31]},
+    {"id": 17, "crop": "maize", "area_ha": 0.8, "soil": "clay_loam", "pump_hp": 5, "head_m": 45, "method": "sprinkler", "das": 62, "dr0_frac": 0.66, "available": [[6, 18]], "habit_start": "08:45", "last_irrigated_days": 4, "served_yesterday": 1.0, "pos": [21, 12]},
+    {"id": 18, "crop": "cotton", "area_ha": 0.8, "soil": "red_sandy_loam", "pump_hp": 5, "head_m": 50, "method": "furrow", "das": 97, "dr0_frac": 0.42, "available": [[6, 18]], "habit_start": "14:00", "last_irrigated_days": 2, "served_yesterday": 1.0, "pos": [41, 11]},
+    {"id": 19, "crop": "groundnut", "area_ha": 0.9, "soil": "red_sandy_loam", "pump_hp": 5, "head_m": 38, "method": "sprinkler", "das": 30, "dr0_frac": 0.46, "available": [[6, 18]], "habit_start": "08:00", "last_irrigated_days": 3, "served_yesterday": 1.0, "pos": [21, 24]},
+    {"id": 20, "crop": "maize", "area_ha": 0.9, "soil": "loam", "pump_hp": 7.5, "head_m": 60, "method": "furrow", "das": 52, "dr0_frac": 0.32, "available": [[10, 18]], "habit_start": "10:30", "last_irrigated_days": 2, "served_yesterday": 1.0, "pos": [41, 23]}
+  ]
+}
