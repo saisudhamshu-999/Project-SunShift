@@ -40,24 +40,33 @@ function ReadySignal({ onReady }: { onReady: () => void }) {
  */
 function FrameDriver({ active }: { active: boolean }) {
   const advance = useThree((s) => s.advance)
+  const clock = useThree((s) => s.clock)
   useEffect(() => {
     if (!active) return
     let raf = 0
+    // R3F stores this timestamp as clock.elapsedTime, which is in seconds; rAF gives milliseconds.
     const tick = (t: number) => {
-      advance(t, true)
+      advance(t / 1000, true)
       raf = requestAnimationFrame(tick)
     }
-    raf = requestAnimationFrame(tick)
+    // Start (or resume after being offscreen/hidden) without one huge catch-up delta.
+    const start = () => {
+      clock.elapsedTime = performance.now() / 1000
+      raf = requestAnimationFrame(tick)
+    }
+    start()
+    // Dev-only: let automated checks read scene time.
+    if (import.meta.env.DEV) ((window as unknown as { __clocks?: Set<typeof clock> }).__clocks ??= new Set()).add(clock)
     const onVisibility = () => {
       cancelAnimationFrame(raf)
-      if (!document.hidden) raf = requestAnimationFrame(tick)
+      if (!document.hidden) start()
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelAnimationFrame(raf)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [active, advance])
+  }, [active, advance, clock])
   return null
 }
 
