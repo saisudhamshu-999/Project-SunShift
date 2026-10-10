@@ -82,8 +82,8 @@ export function HeroScene({
     // shots get as much scroll as the long aerial moves.
     const t = Math.min(1, Math.max(0, p))
     if (alive) {
-      // Finale: a slow orbit over the living feeder.
-      const a = state.clock.elapsedTime * 0.035
+      // Finale: a slow orbit over the living feeder (one lap in about 9 minutes).
+      const a = state.clock.elapsedTime * 0.012
       cam.position.set(6 + Math.sin(a) * 92, 54, -2 + Math.cos(a) * 92)
       look.current.set(6, 0, -2)
     } else {
@@ -106,8 +106,9 @@ export function HeroScene({
     }
     if (!d) return
 
-    // Time of day: dawn to mid-morning across the flight; the finale runs a full day loop.
-    const hour = alive ? 6.2 + ((state.clock.elapsedTime * 0.18) % 11.6) : 5.95 + p * 3.6
+    // Time of day: dawn to mid-morning across the flight; the finale loops the day at a calm
+    // pace (06:00 to 17:48 in about 3 minutes, so each 15-minute pump slot lasts ~4 s).
+    const hour = alive ? 6.2 + ((state.clock.elapsedTime * 0.06) % 11.6) : 5.95 + p * 3.6
     d.sun = sunAt(date, hour)
     d.underground = Math.max(0, Math.min(1, -cam.position.y / 0.7))
     d.solarOutput = Math.max(0, Math.min(1, (d.sun.elevation - 2) / 45))
