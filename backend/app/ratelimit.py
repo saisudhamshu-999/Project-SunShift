@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 
 COMPUTE_PATHS = ("/api/jobs", "/api/plan", "/api/sensitivity", "/api/fairness", "/api/rain-event")
-ADMIN_PREFIXES = ("/api/feeders", "/api/farms")
+ADMIN_PREFIXES = ("/api/feeders", "/api/farms", "/api/dispatch", "/api/sms")
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
 

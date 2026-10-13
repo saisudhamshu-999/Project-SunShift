@@ -435,6 +435,20 @@ export interface Health {
   defaultPlanDate: string
 }
 
+/** GET /api/messages: farmer SMS without phone numbers. */
+export interface MessageRow {
+  id: string
+  farmId: number | null
+  code: string | null
+  direction: 'in' | 'out'
+  language: 'en' | 'hi' | 'te'
+  body: string
+  status: 'simulated' | 'sent' | 'failed' | 'received'
+  provider: string
+  error: string | null
+  createdAt: string
+}
+
 export type JobKind = 'plan' | 'sensitivity' | 'fairness' | 'rain-event'
 
 /** A solver job (POST /api/jobs, GET /api/jobs/{id}). */

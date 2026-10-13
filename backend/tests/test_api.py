@@ -254,7 +254,7 @@ def test_migrations_match_the_models(make_client):
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         engine.dispose()
     assert diffs == [], diffs
-    assert version == "0002"
+    assert version == "0003"
 
 
 def test_database_created_before_migrations_is_upgraded(database):
@@ -297,3 +297,32 @@ def test_ml_card_endpoint(make_client):
     assert card["loaded"]["solar"] and card["loaded"]["rain"]
     assert card["solar"]["hourlyRmseLikely"] < card["solar"]["hourlyRmseRaw"]
     assert h["ml"] == card["loaded"]
+
+
+def test_populated_database_upgrades_to_the_latest_schema(database):
+    """A registry with farms and pumps (schema 0002) must upgrade without losing rows."""
+    from alembic import command
+
+    engine = create_engine(db.database_url())
+    cfg = db._alembic_config()
+    with engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0002")
+        conn.execute(text("INSERT INTO feeders VALUES ('F07', 'Feeder 07', 'warangal', 120, 95, 60, 15, true, "
+                          "'2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00')"))
+        conn.execute(text("INSERT INTO farms (id, feeder_id, crop, area_ha, soil, method, das, available, habit_start, "
+                          "dr0_frac, served_yesterday, last_irrigated_days, simulated, active, created_at, updated_at) "
+                          "VALUES (1, 'F07', 'cotton', 1.2, 'loam', 'drip', 60, '[[6, 18]]', '07:00', 0.5, 1.0, 2, true, true, "
+                          "'2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00')"))
+        conn.execute(text("INSERT INTO pumps (farm_id, hp, head_m, controller, updated_at) "
+                          "VALUES (1, 5, 40, 'advisory', '2026-01-01 00:00:00+00')"))
+    engine.dispose()
+    assert db.init_db() == database
+    engine = create_engine(db.database_url())
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0003"
+        row = conn.execute(text("SELECT crop, language, sms_opt_in, phone FROM farms WHERE id = 1")).one()
+        assert row[0] == "cotton" and row[1] == "te" and not row[2] and row[3] is None
+        assert conn.execute(text("SELECT count(*) FROM pumps")).scalar() == 1
+        assert "_alembic_tmp_farms" not in inspect(conn).get_table_names()
+    engine.dispose()

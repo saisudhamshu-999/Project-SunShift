@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import db, registry
+from . import db, messaging, registry
 from .api import LeaseGate, make_job_manager, router
 from .engine.scenario import REPO_ROOT
 from .ratelimit import RateLimiter, RateLimitMiddleware
@@ -46,6 +46,7 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
         lifespan=lifespan,
     )
     app.state.settings = settings
+    app.state.gateway = messaging.gateway_for(settings)
     app.state.season_gate = LeaseGate(settings.max_concurrent_seasons)
 
     app.add_middleware(GZipMiddleware, minimum_size=2048)

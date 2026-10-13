@@ -196,3 +196,12 @@ describe('parity with the Python engine', () => {
     }
   })
 })
+
+describe('farmer SMS parity with the backend', () => {
+  it('builds exactly the SMS the server sends', async () => {
+    const { smsFor } = await import('@/components/farmer/messages')
+    for (const { farm, lang, lines } of parity.sms) {
+      expect(smsFor(farm as unknown as Parameters<typeof smsFor>[0], lang as 'en' | 'hi' | 'te').lines, `${farm.code} ${lang}`).toEqual(lines)
+    }
+  })
+})

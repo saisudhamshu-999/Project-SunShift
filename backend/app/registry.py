@@ -26,7 +26,7 @@ log = logging.getLogger("sunshift.registry")
 
 FARM_FIELDS = (
     "label", "crop", "area_ha", "soil", "method", "das", "sowing_date", "available", "habit_start",
-    "dr0_frac", "served_yesterday", "last_irrigated_days", "map_x", "map_y",
+    "dr0_frac", "served_yesterday", "last_irrigated_days", "map_x", "map_y", "phone", "language", "sms_opt_in",
 )
 PUMP_FIELDS = ("hp", "head_m", "controller", "measured_kw", "measured_flow_m3h")
 FEEDER_FIELDS = ("name", "location_id", "pv_kwp", "inverter_kw", "feeder_limit_kw", "grid_backup_kw")
@@ -141,6 +141,20 @@ def _farm(row: db.FarmRow, pump: db.PumpRow | None, base: Scenario, day: str | N
     )
 
 
+def _with_override(farm: Farm, o: db.FarmOverride | None) -> Farm:
+    """A farmer's reply for the day: no pumping before ``earliest_hour``."""
+    if o is None or o.earliest_hour is None:
+        return farm
+    windows = tuple((max(a, o.earliest_hour), b) for a, b in farm.available if b > o.earliest_hour)
+    return replace(farm, available=windows)
+
+
+def mask_phone(phone: str | None) -> str | None:
+    if not phone:
+        return None
+    return phone[:3] + "•" * max(0, len(phone) - 7) + phone[-4:]
+
+
 def _farm_raw(farm: Farm) -> dict[str, Any]:
     """The scenario-file shape of a farm, so /api/scenario keeps its format."""
     return {
@@ -169,7 +183,10 @@ def scenario(feeder_id: str | None = None, day: str | None = None) -> Scenario:
                 select(func.count()).select_from(db.FarmRow)
                 .where(db.FarmRow.feeder_id == fid, db.FarmRow.sowing_date.is_not(None))
             ))
-            key = (fid, db.aware(feeder.updated_at).isoformat(), day if uses_dates else None)
+            overrides = {}
+            if day:
+                overrides = {o.farm_id: o for o in s.scalars(select(db.FarmOverride).where(db.FarmOverride.plan_date == day)).all()}
+            key = (fid, db.aware(feeder.updated_at).isoformat(), day if uses_dates or overrides else None)
             with _cache_lock:
                 hit = _cache.get(key)
             if hit is not None:
@@ -178,7 +195,10 @@ def scenario(feeder_id: str | None = None, day: str | None = None) -> Scenario:
                 select(db.FarmRow).where(db.FarmRow.feeder_id == fid, db.FarmRow.active.is_(True)).order_by(db.FarmRow.id)
             ).all()
             pumps = {p.farm_id: p for p in s.scalars(select(db.PumpRow).where(db.PumpRow.farm_id.in_([r.id for r in rows]))).all()}
-            farms = tuple(_farm(r, pumps.get(r.id), base, day) for r in rows)
+            farms = tuple(
+                _with_override(_farm(r, pumps.get(r.id), base, day), overrides.get(r.id))
+                for r in rows if not (r.id in overrides and overrides[r.id].skip)
+            )
             sc = replace(
                 base,
                 feeder=replace(
@@ -224,6 +244,7 @@ def _farm_dict(r: db.FarmRow, p: db.PumpRow | None) -> dict[str, Any]:
         "available": r.available, "habitStart": r.habit_start, "dr0Frac": r.dr0_frac,
         "servedYesterday": r.served_yesterday, "lastIrrigatedDays": r.last_irrigated_days,
         "mapX": r.map_x, "mapY": r.map_y, "simulated": r.simulated, "active": r.active,
+        "phone": mask_phone(r.phone), "language": r.language, "smsOptIn": r.sms_opt_in,
         "pump": None if p is None else {
             "hp": p.hp, "headM": p.head_m, "controller": p.controller,
             "measuredKw": p.measured_kw, "measuredFlowM3h": p.measured_flow_m3h,
@@ -356,3 +377,29 @@ def main() -> None:  # pragma: no cover - CLI
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+
+
+# ------------------------------------------------------------- messaging
+
+
+def farm_by_phone(phone: str) -> db.FarmRow | None:
+    with db.session() as s:
+        s = _require_session(s)
+        return s.scalars(select(db.FarmRow).where(db.FarmRow.phone == phone, db.FarmRow.active.is_(True))).first()
+
+
+def set_override(farm_id: int, day: str, *, skip: bool = False, earliest_hour: float | None = None, source: str = "sms") -> None:
+    """Record a farmer's change for one day and invalidate cached plans for the feeder."""
+    with db.session() as s:
+        s = _require_session(s)
+        row = s.get(db.FarmOverride, (farm_id, day))
+        if row is None:
+            row = db.FarmOverride(farm_id=farm_id, plan_date=day, skip=skip, earliest_hour=earliest_hour,
+                                  source=source, created_at=db.utcnow())
+            s.add(row)
+        else:
+            row.skip, row.earliest_hour, row.source, row.created_at = skip, earliest_hour, source, db.utcnow()
+        farm = s.get(db.FarmRow, farm_id)
+        if farm is not None:
+            _touch(s, farm.feeder_id)
+    clear_cache()

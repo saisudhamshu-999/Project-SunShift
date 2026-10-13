@@ -19,6 +19,7 @@ from app.engine import agronomy as ag
 from app.engine.heuristic import greedy
 from app.engine.optimiser import Job, Problem
 from app.engine.scenario import REPO_ROOT, available_slots, load_scenario
+from app.messaging import LANGS, sms_lines
 
 FIXTURE = REPO_ROOT / "shared" / "fixtures" / "engine-parity.json"
 
@@ -32,6 +33,21 @@ WEATHER_CASES = [  # (et0, rain forecast mm, rain probability %)
     (5.2, 0.0, 0.0),
     (4.1, 22.0, 80.0),
     (6.8, 3.0, 40.0),
+]
+
+
+def _sms_farm(code, crop, window, m3, *, deferred=False, rain=0.0, soil="MODERATE", solar="HIGH", rain_level="LOW", served=1.0):
+    return {"id": int(code[1:]), "code": code, "crop": crop, "deferred": deferred, "rainExpectedMm": rain,
+            "servedYesterday": served, "schedule": {"window": window, "scheduledM3": m3},
+            "reasons": [{"factor": "Soil stress", "level": soil}, {"factor": "Solar availability", "level": solar},
+                        {"factor": "Rain probability", "level": rain_level}]}
+
+
+SMS_CASES = [  # scheduled (with every reason combination worth checking), deferred for rain, not needed
+    _sms_farm("F07", "cotton", "09:30–12:15, 14:00–15:00", 12.5, soil="HIGH", served=0.6),
+    _sms_farm("F12", "chilli", "06:00–07:45", 1234.5, solar="MODERATE", rain_level="MODERATE"),
+    _sms_farm("F03", "maize", "", 0.0, deferred=True, rain=17.5),
+    _sms_farm("F18", "groundnut", "", 0.0),
 ]
 
 
@@ -99,7 +115,11 @@ def build() -> dict:
             },
             "on": {str(k): v for k, v in greedy(p).items()},
         })
-    return {"et0": et0, "assess": assess, "greedy": schedules}
+    sms = []
+    for farm in SMS_CASES:
+        for lang in LANGS:
+            sms.append({"farm": farm, "lang": lang, "lines": sms_lines(farm, lang)})
+    return {"et0": et0, "assess": assess, "greedy": schedules, "sms": sms}
 
 
 if __name__ == "__main__":

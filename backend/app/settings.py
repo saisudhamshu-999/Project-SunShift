@@ -50,6 +50,13 @@ class Settings:
     # Security
     api_key: str | None = None
     allowed_origins: list[str] = field(default_factory=list)
+    # Farmer SMS: 'simulated' (record only) or 'twilio'
+    sms_provider: str = "simulated"
+    twilio_sid: str | None = None
+    twilio_token: str | None = None
+    twilio_from: str | None = None
+    # The public URL Twilio calls (behind a proxy the request URL differs; signatures use this)
+    public_base_url: str | None = None
     # Housekeeping
     runs_retention: int = 5000
     jobs_retention_h: int = 24
@@ -71,6 +78,11 @@ class Settings:
             rate_read=_rate("RATE_LIMIT_READ", "1200/200"),
             api_key=os.environ.get("SUNSHIFT_API_KEY") or None,
             allowed_origins=origins,
+            sms_provider=os.environ.get("SMS_PROVIDER", "simulated").strip().lower(),
+            twilio_sid=os.environ.get("TWILIO_ACCOUNT_SID") or None,
+            twilio_token=os.environ.get("TWILIO_AUTH_TOKEN") or None,
+            twilio_from=os.environ.get("TWILIO_FROM") or None,
+            public_base_url=os.environ.get("PUBLIC_BASE_URL") or None,
             runs_retention=max(100, _int("RUNS_RETENTION", 5000)),
             jobs_retention_h=max(1, _int("JOBS_RETENTION_H", 24)),
         )

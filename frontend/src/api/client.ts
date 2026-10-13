@@ -3,6 +3,7 @@ import type {
   Health,
   Job,
   JobKind,
+  MessageRow,
   MlCard,
   PlanRequest,
   PlanResult,
@@ -147,6 +148,14 @@ export function mlCard(): Promise<MlCard | null> {
     return null
   })
   return mlCardPromise
+}
+
+export async function messages(limit = 30): Promise<MessageRow[]> {
+  try {
+    return await request<MessageRow[]>(`/api/messages?limit=${limit}`, { timeoutMs: 5000 })
+  } catch {
+    return []
+  }
 }
 
 export async function runs(limit = 12): Promise<RunRow[]> {

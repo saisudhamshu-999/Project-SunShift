@@ -18,13 +18,13 @@ from typing import Any, Literal
 
 import ortools
 import pvlib
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
-from starlette.concurrency import iterate_in_threadpool
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
-from . import db, registry
+from . import db, messaging, registry
 from .engine import planner, season
 from .engine.scenario import load_scenario
 from .engine.weather import apply_mode
@@ -161,6 +161,9 @@ class FarmPatch(_Model):
     last_irrigated_days: int | None = Field(default=None, ge=0, le=60)
     map_x: float | None = None
     map_y: float | None = None
+    phone: str | None = Field(default=None, pattern=r"^\+[1-9]\d{7,14}$", description="E.164, e.g. +919876543210")
+    language: Literal["te", "hi", "en"] | None = None
+    sms_opt_in: bool | None = None
     pump: PumpIn | None = None
 
     @field_validator("soil")
@@ -184,6 +187,8 @@ class FarmCreate(FarmPatch):
     dr0_frac: float = Field(default=0.5, ge=0, le=1)
     served_yesterday: float = Field(default=1.0, ge=0, le=1)
     last_irrigated_days: int = Field(default=2, ge=0, le=60)
+    language: Literal["te", "hi", "en"] = "te"
+    sms_opt_in: bool = False
     pump: PumpIn
 
     @model_validator(mode="after")
@@ -498,3 +503,102 @@ def update_farm(farm_id: int, body: FarmPatch) -> dict:
 @router.delete("/farms/{farm_id}", dependencies=[Depends(require_api_key)])
 def deactivate_farm(farm_id: int) -> dict:
     return registry.deactivate_farm(farm_id)
+
+
+# -------------------------------------------------------------------- messaging
+
+
+class DispatchRequest(_Model):
+    date: str | None = Field(default=None, pattern=DATE)
+    feeder: str | None = Field(default=None, max_length=32)
+    farms: list[int] | None = None  # only these farms (default: everyone opted in)
+    dry_run: bool = False
+
+
+@router.post("/dispatch", dependencies=[Depends(require_api_key)])
+async def dispatch(body: DispatchRequest, request: Request) -> dict:
+    """Plan the day and send every opted-in farmer their window. Schedule it each morning."""
+    plan = await _solve_and_wait(request, "plan", PlanRequest(date=body.date, feeder=body.feeder, persist=True))
+    return await run_in_threadpool(messaging.send_plan, plan, request.app.state.gateway,
+                                   only=set(body.farms) if body.farms else None, dry_run=body.dry_run)
+
+
+@router.get("/messages")
+def messages(limit: int = Query(default=30, ge=1, le=200)) -> list[dict]:
+    return messaging.recent_messages(limit)
+
+
+def _reply_response(gateway: messaging.Gateway, action: str, text: str) -> Response:
+    if gateway.name == "twilio":  # TwiML: Twilio sends the <Message> back to the farmer
+        from xml.sax.saxutils import escape
+
+        return Response(f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escape(text)}</Message></Response>',
+                        media_type="application/xml")
+    return JSONResponse({"action": action, "reply": text})
+
+
+async def _replan_after_reply(app, day: str, farm_code: str) -> None:
+    """Re-plan the rest of the day from what was sent, then tell farmers whose windows moved."""
+    try:
+        sent = messaging.latest_dispatch(day)
+        sc = registry.scenario(None, day)
+        now = planner._now_slot(day, sc) or 0
+        executed = {int(k): [t for t in v if t < now] for k, v in (sent.schedule if sent else {}).items()}
+        req = PlanRequest(date=day, fixed_until=now, executed=executed, persist=True, fresh=True)
+        jobs: JobManager = app.state.jobs
+        payload = req.model_dump(mode="json")
+        job = jobs.submit("plan", payload, key_payload={k: v for k, v in payload.items() if k not in ("persist", "fresh")},
+                          context=f"{day}|{registry.version(None)}", fresh=True)
+        if job["status"] not in ("done", "failed"):
+            job = await jobs.wait(job["id"], timeout_s=90) or job
+        if job["status"] != "done":
+            log.warning("re-plan after reply from %s did not finish: %s", farm_code, job.get("error"))
+            return
+        await run_in_threadpool(messaging.send_plan, job["result"], app.state.gateway, reason=f"reply from {farm_code}",
+                                updates_from=sent.schedule if sent else None)
+    except Exception:
+        log.exception("re-plan after reply from %s failed", farm_code)
+
+
+@router.post("/sms/inbound")
+async def sms_inbound(request: Request, background: BackgroundTasks) -> Response:
+    """Farmers' replies. Twilio posts here (signed); in simulated mode the API key is required."""
+    from urllib.parse import parse_qs
+
+    gateway = request.app.state.gateway
+    settings = request.app.state.settings
+    params = {k: v[0] for k, v in parse_qs((await request.body()).decode("utf-8", "replace")).items()}
+    if isinstance(gateway, messaging.TwilioGateway):
+        url = (settings.public_base_url.rstrip("/") + request.url.path) if settings.public_base_url else str(request.url)
+        if not gateway.valid_signature(url, params, request.headers.get("X-Twilio-Signature")):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+    else:
+        require_api_key(request, request.headers.get("X-API-Key"))
+    phone, text = params.get("From", "").strip(), params.get("Body", "")
+    farm = registry.farm_by_phone(phone) if phone else None
+    lang = farm.language if farm and farm.language in messaging.LANGS else "en"
+    t = messaging.T[lang]
+    messaging._record(direction="in", farm_id=farm.id if farm else None, phone=phone, language=lang, body=text,
+                      result=None, provider=gateway.name)
+    if farm is None:
+        return _reply_response(gateway, "unknown-sender", "This number is not registered with SunShift.")
+    # The day being planned: tomorrow's dispatch after the evening send, otherwise today's.
+    days = [planner.default_plan_date(), planner.ist_now().date().isoformat()]
+    day = next((d for d in days if messaging.latest_dispatch(d)), days[0])
+    sent = messaging.latest_dispatch(day)
+    reply = messaging.parse_reply(text)
+    if reply.kind == "confirm":
+        slots = (sent.schedule if sent else {}).get(str(farm.id), [])
+        sc = registry.scenario(None, day)
+        from .engine.scenario import window_label
+
+        window = window_label(slots, sc.feeder)
+        return _reply_response(gateway, "confirmed", t["confirmed"].format(w=window) if window else t["notNeeded"])
+    if reply.kind == "change":
+        return _reply_response(gateway, "asked-time", t["changeAsk"])
+    if reply.kind in ("time", "skip"):
+        registry.set_override(farm.id, day, skip=reply.kind == "skip", earliest_hour=reply.hour)
+        background.add_task(_replan_after_reply, request.app, day, f"F{farm.id:02d}")
+        return _reply_response(gateway, "replanning" if reply.kind == "time" else "skipped",
+                               t["replanning"] if reply.kind == "time" else t["skipped"])
+    return _reply_response(gateway, "help", t["help"])

@@ -12,6 +12,7 @@ import { Feeder } from '@/sections/Feeder'
 import { FinalCta } from '@/sections/FinalCta'
 import { Hardware } from '@/sections/Hardware'
 import { Hero } from '@/sections/Hero'
+import { Economics } from '@/sections/Economics'
 import { Impact } from '@/sections/Impact'
 import { IndiaFit, WhoDeploys } from '@/sections/IndiaFit'
 import { NotJustWeather } from '@/sections/NotJustWeather'
@@ -58,6 +59,7 @@ export default function Home() {
       <DeploymentModes />
       {/* IX · The impact */}
       <Impact />
+      <Economics />
       <Season />
       <DigitalTwin />
       {/* X · The future */}

@@ -3,7 +3,7 @@ import { Logo } from './Logo'
 
 const COLS = [
   { title: 'System', links: [['How it works', '/#system'], ['Simulation', '/#simulation'], ['Feeder', '/#feeder'], ['Technology', '/#technology']] },
-  { title: 'Impact', links: [['Water', '/#impact'], ['Energy', '/#impact'], ['Agriculture', '/#farm']] },
+  { title: 'Impact', links: [['Water', '/#impact'], ['Energy', '/#impact'], ['Economics', '/#economics'], ['Agriculture', '/#farm']] },
   { title: 'Build', links: [['Architecture', '/#architecture'], ['Deployment', '/#deployment'], ['Roadmap', '/#roadmap']] },
   { title: 'Product', links: [['Live feeder', '/app'], ['Demo mode', '/demo']] },
 ]

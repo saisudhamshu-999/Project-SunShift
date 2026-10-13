@@ -6,6 +6,7 @@ import { Convergence } from '@/components/charts/Convergence'
 import { Gantt, type GanttRow } from '@/components/charts/Gantt'
 import { ConstraintMonitor } from '@/components/dashboard/ConstraintMonitor'
 import { ForecastModels } from '@/components/dashboard/ForecastModels'
+import { MessageLog } from '@/components/dashboard/MessageLog'
 import { FarmLabelOverlay } from '@/components/dashboard/FarmLabelOverlay'
 import { KpiStrip } from '@/components/dashboard/KpiStrip'
 import { ScenarioControls } from '@/components/dashboard/ScenarioControls'
@@ -364,8 +365,11 @@ export default function LiveApp() {
                   </ol>
                 )}
               </section>
-              <section className="rounded-[22px] border border-ivory/10 p-5" aria-label="Scenario">
+              <section className="space-y-6 rounded-[22px] border border-ivory/10 p-5" aria-label="Scenario and farmer messages">
                 <ScenarioControls compact />
+                <div className="border-t border-ivory/10 pt-4">
+                  <MessageLog />
+                </div>
               </section>
               <section className="space-y-5 rounded-[22px] border border-ivory/10 p-5" aria-label="Solver">
                 <div>

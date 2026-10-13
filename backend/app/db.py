@@ -29,6 +29,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     event,
+    false,
     inspect,
     select,
     text,
@@ -146,8 +147,55 @@ class FarmRow(Base):
     map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     simulated: Mapped[bool] = mapped_column(Boolean, default=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Messaging. The phone number is personal data: stored here only, never returned by the API.
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    language: Mapped[str] = mapped_column(String(2), default="te", server_default="te")
+    sms_opt_in: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Dispatch(Base):
+    """A schedule as sent to farmers; replies re-plan from it."""
+
+    __tablename__ = "dispatches"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    feeder_id: Mapped[str] = mapped_column(String(32))
+    plan_date: Mapped[str] = mapped_column(String(10), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    schedule: Mapped[dict[str, Any]] = mapped_column(JSON)  # {farm id: [slots]}
+    reason: Mapped[str] = mapped_column(String(40))  # morning | reply from F07 | ...
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    dispatch_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    farm_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    direction: Mapped[str] = mapped_column(String(3))  # out | in
+    phone_masked: Mapped[str] = mapped_column(String(20))
+    language: Mapped[str] = mapped_column(String(2))
+    body: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(12))  # simulated | sent | failed | received
+    provider: Mapped[str] = mapped_column(String(12))
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class FarmOverride(Base):
+    """A farmer's change for one day, from an SMS reply: skip the day, or start no earlier than an hour."""
+
+    __tablename__ = "farm_overrides"
+
+    farm_id: Mapped[int] = mapped_column(Integer, ForeignKey("farms.id"), primary_key=True)
+    plan_date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    skip: Mapped[bool] = mapped_column(Boolean)
+    earliest_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(12))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class PumpRow(Base):

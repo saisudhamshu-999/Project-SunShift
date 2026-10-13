@@ -83,6 +83,9 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 | `RATE_LIMITS` | `on` | Per-client rate limits; `off` disables them |
 | `RATE_LIMIT_COMPUTE`, `_SEASON`, `_ADMIN`, `_READ` | `30/12`, `6/2`, `60/20`, `1200/200` | Requests per minute / burst, per client IP |
 | `RUNS_RETENTION`, `JOBS_RETENTION_H` | `5000`, `24` | Stored plan runs kept, and hours finished jobs are kept |
+| `SMS_PROVIDER` | `simulated` | `simulated` records messages without sending; `twilio` sends real SMS |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | unset | Twilio credentials and sender number, required when `SMS_PROVIDER=twilio` |
+| `PUBLIC_BASE_URL` | unset | The public URL Twilio calls (e.g. `https://sunshift.example`); webhook signatures are checked against it |
 | `LOG_LEVEL` | `INFO` | Python log level |
 | `SUNSHIFT_STATIC` | `frontend/dist` | Built site to serve |
 | `SUNSHIFT_SCENARIO` | `shared/scenario.json` | Feeder scenario file |
@@ -91,8 +94,8 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 ## Tests
 
 ```bash
-cd backend && python -m pytest       # 88 tests
-cd frontend && npm test              # 23 tests
+cd backend && python -m pytest       # 115 tests
+cd frontend && npm test              # 24 tests
 ```
 
 The API tests run every case twice: on SQLite and on a real PostgreSQL. Locally that PostgreSQL comes
@@ -114,6 +117,11 @@ from the `pgserver` package in `requirements-dev.txt`; CI uses a PostgreSQL serv
 - A parity fixture (`shared/fixtures/engine-parity.json`) holds the Python engine's answers to fixed
   inputs. A Python test fails if the engine changes without regenerating it (`python -m tests.parity`),
   and a TypeScript test fails if the browser engine disagrees with it.
+- The messaging tests cover the SMS wording (identical to the site's preview, in all three languages,
+  through the parity fixture), Indian number formatting, the Twilio client against a mock server, phone
+  numbers never leaving the database, dispatch, every reply type, a new time re-planning the day and
+  notifying exactly the farmers whose windows moved, a skip lasting only that day, and Twilio webhook
+  signatures.
 - The ML tests re-check the shipped models on a stored sample of the held-out year (offline): the likely
   solar curve must beat the raw forecast by at least 10% RMSE, the cautious curve must miss between 5% and
   16% of hours, and the rain model must beat the forecast's yes/no and the base rate. They also check
@@ -223,15 +231,53 @@ What these models do not do, stated plainly:
   scenarios, and not in the browser fallback engine. The season simulation still uses its modelled
   forecast errors, not these models.
 
+## Farmer messaging
+
+Each farm in the registry can have a phone number, a language (Telugu, Hindi or English) and an SMS
+opt-in. Phone numbers are stored in the database only: the API returns them masked (`+91••••••3210`) and
+the message log never includes them.
+
+```bash
+# each morning (cron, a scheduler, or by hand): plan the day and text every opted-in farmer
+curl -X POST https://<host>/api/dispatch -H "X-API-Key: $SUNSHIFT_API_KEY" -H "content-type: application/json" -d '{}'
+```
+
+Farmers reply to the same number:
+
+| Reply | Effect |
+| --- | --- |
+| `1` (or OK, సరే, ठीक है) | Confirms; the reply repeats their window |
+| `2` (or CHANGE) | Asks them for a time that suits them |
+| a time, e.g. `14:00` or `9.30` | No pumping before that time today: the rest of the day is re-planned (what already ran is kept), and every farmer whose window moved gets an update |
+| `0` (or NO, नहीं, కాదు) | No irrigation for that farm today; the day is re-planned without it |
+
+With `SMS_PROVIDER=twilio`, point the Twilio number's incoming-message webhook at
+`https://<host>/api/sms/inbound`; requests without a valid Twilio signature are refused. In the default
+simulated mode the same endpoint needs the API key, which makes it a test harness. `/app` shows the message
+log. For SMS to Indian numbers, operators require DLT registration of the sender ID and of every message
+template (TRAI rules); that registration is outside this code. The Hindi and Telugu wording should be
+reviewed by native speakers before real use.
+
+## Economics
+
+The home page's economics section values SunShift for one feeder. Energy and water come from the day's
+actual plan, compared with the same farms pumping at their usual times, in one of two modes: **solar only**
+(saves grid energy, usually delivers a little less water) or **with grid backup** (delivers more water,
+may use a little more grid energy). Every price (cost of supplying farm power, value of water, SMS,
+hosting, controller kit and its life, transformer failures avoided) is an editable assumption with an
+illustrative default, not a quote or a tariff. It reports annual value, cost and net for an advisory
+(SMS-only) and an automated (controller) tier, and the automated tier's payback.
+
 ## Data honesty
 
 | Real, computed live | Simulated | Designed, not built |
 | ------------------- | --------- | ------------------- |
 | Weather from Open-Meteo or ERA5, wherever it is labelled so | The 20 farms: crops, soils, pumps, availability windows and yesterday's service | The pump controller hardware and firmware (the site shows the electrical design) |
-| ET₀, crop need and the soil-water balance (FAO-56) | Pump telemetry and faults on `/app` | The SMS and IVR gateway (messages and call scripts are generated, then previewed in the browser; the IVR voice uses the browser's speech synthesis) |
+| ET₀, crop need and the soil-water balance (FAO-56) | Pump telemetry and faults on `/app` | The IVR voice line (call scripts are generated and previewed in the browser with its speech synthesis) |
 | The PV output model (pvlib) | Yield effects: a relative index from FAO-33 Ky factors, not measurements | DISCOM / feeder SCADA integration |
 | Every CP-SAT solve and every baseline comparison | | |
 | The ML corrections and their held-out results (trained on archived forecasts against ERA5) | | |
+| SMS sending (Twilio) and replies that re-plan the day; simulated unless Twilio is configured | | DLT registration for Indian SMS |
 
 All savings shown are comparisons between strategies on this simulated feeder. None are field results.
 
@@ -242,6 +288,9 @@ All savings shown are comparisons between strategies on this simulated feeder. N
 | GET  | `/api/health` | Engine, library versions, database and registry status, solver queue, default plan date |
 | GET  | `/api/scenario` | The feeder scenario (farms, crops, soils, locations), from the registry |
 | GET  | `/api/ml` | The ML model card: data, training and test periods, held-out metrics, backtest, limitations |
+| POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms` and `date` optional). Needs `X-API-Key` |
+| POST | `/api/sms/inbound` | Farmers' replies (Twilio webhook, signature checked; simulated mode needs `X-API-Key`) |
+| GET  | `/api/messages` | Recent messages, without phone numbers |
 | POST | `/api/jobs` | Queue a solve: `{"kind": ..., "params": {...}}` with kind `plan`, `sensitivity`, `fairness` or `rain-event`. Returns 202 and a job to poll, or 200 with the result when an identical request was just solved |
 | GET  | `/api/jobs/{id}` | A job's status (`queued`, `running`, `done`, `failed`) and, when done, its result |
 | POST | `/api/plan` | Plan one day. Accepts weather modes, solar events, fixed/executed slots for re-planning, crop overrides and failure drills. Runs as a job and waits for it, for simple clients |
@@ -284,6 +333,8 @@ backend/app/ratelimit.py  per-client rate limits (security.py: the API key for r
 backend/app/db.py         SQLAlchemy models and persistence (PostgreSQL or SQLite)
 backend/migrations/       Alembic migrations, applied at startup
 backend/app/ml/           ML weather corrections: features, data fetch, training (train.py), runtime, artifacts/
+backend/app/messaging.py  farmer SMS: wording in three languages, gateways (simulated, Twilio), replies
+docs/DEMO_SCRIPT.md       the demo video script, timed to /demo
 backend/tests/            pytest suite (engine, API on SQLite and PostgreSQL, engine parity)
 frontend/src/sections/    the story site, one file per section
 frontend/src/routes/      Home, LiveApp (/app), Demo (/demo)
@@ -294,7 +345,8 @@ frontend/src/engine/      the in-browser fallback engine (TypeScript port) and i
 ## Limitations
 
 - The registry stores farms and pumps, but nothing ingests live telemetry yet (SCADA, smart meters or pump
-  controllers), and no SMS or IVR gateway is connected. Pump events on `/app` are simulated.
+  controllers). Pump events on `/app` are simulated. SMS works through Twilio once configured; the voice
+  (IVR) line is not connected.
 - Soil moisture is modelled, not sensed. A few probes per feeder would let the balance recalibrate itself.
 - One API key guards all registry writes; there are no user accounts or roles. Planning is open to anyone
   who can reach the server, protected by rate limits and the bounded queue.
