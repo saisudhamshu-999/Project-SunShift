@@ -8,6 +8,7 @@ export function SeasonChart({
   unit,
   ss,
   bau,
+  final,
   days,
   better,
   digits = 0,
@@ -17,6 +18,8 @@ export function SeasonChart({
   unit: string
   ss: number[]
   bau: number[]
+  /** Exact season totals once the summary arrives (the curves sum rounded daily values). */
+  final?: [number, number]
   days: number
   better: 'lower' | 'higher' | 'neutral'
   digits?: number
@@ -29,8 +32,8 @@ export function SeasonChart({
   const x = (i: number) => (days <= 1 ? 0 : (i / (days - 1)) * (width - 2) + 1)
   const y = (v: number) => H - 6 - (v / max) * (H - 16)
   const line = (vals: number[]) => vals.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join('')
-  const a = ss[ss.length - 1] ?? 0
-  const b = bau[bau.length - 1] ?? 0
+  const a = final?.[0] ?? ss[ss.length - 1] ?? 0
+  const b = final?.[1] ?? bau[bau.length - 1] ?? 0
   const delta = b ? (a - b) / Math.abs(b) : 0
   const good = better === 'lower' ? a <= b : a >= b
   const ink = dark ? '#f3eee4' : '#15140f'

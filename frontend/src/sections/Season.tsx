@@ -87,6 +87,8 @@ export function Season() {
     }
   }, [days])
   const last = days[days.length - 1]
+  const fin = (k: keyof SeasonSummary, scale = 1): [number, number] | undefined =>
+    summary ? [Number(summary.sunshift[k]) * scale, Number(summary.bau[k]) * scale] : undefined
   const maxRain = Math.max(5, ...days.map((d) => d.rainMm))
 
   return (
@@ -146,12 +148,12 @@ export function Season() {
             </div>
 
             <div className="mt-8 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
-              <SeasonChart dark title="Water pumped" unit="m³" ss={series.water.ss} bau={series.water.bau} days={total} better="neutral" />
-              <SeasonChart dark title="Pump energy" unit="kWh" ss={series.energy.ss} bau={series.energy.bau} days={total} better="neutral" />
-              <SeasonChart dark title="Energy from the grid" unit="kWh" ss={series.grid.ss} bau={series.grid.bau} days={total} better="lower" />
-              <SeasonChart dark title="Feeder overload" unit="min" ss={series.overload.ss} bau={series.overload.bau} days={total} better="lower" />
-              <SeasonChart dark title="Crop stress" unit="farm-days" ss={series.stress.ss} bau={series.stress.bau} days={total} better="lower" />
-              <SeasonChart dark title="Water lost below roots" unit="m³" ss={series.waste.ss} bau={series.waste.bau} days={total} better="lower" />
+              <SeasonChart dark final={fin('waterM3')} title="Water pumped" unit="m³" ss={series.water.ss} bau={series.water.bau} days={total} better="neutral" />
+              <SeasonChart dark final={fin('energyKwh')} title="Pump energy" unit="kWh" ss={series.energy.ss} bau={series.energy.bau} days={total} better="neutral" />
+              <SeasonChart dark final={fin('gridKwh')} title="Energy from the grid" unit="kWh" ss={series.grid.ss} bau={series.grid.bau} days={total} better="lower" />
+              <SeasonChart dark final={fin('overloadSlots', 15)} title="Feeder overload" unit="min" ss={series.overload.ss} bau={series.overload.bau} days={total} better="lower" />
+              <SeasonChart dark final={fin('stressFarmDays')} title="Crop stress" unit="farm-days" ss={series.stress.ss} bau={series.stress.bau} days={total} better="lower" />
+              <SeasonChart dark final={fin('deepPercolationM3')} title="Water lost below roots" unit="m³" ss={series.waste.ss} bau={series.waste.bau} days={total} better="lower" />
             </div>
 
             <div className="mt-10">
