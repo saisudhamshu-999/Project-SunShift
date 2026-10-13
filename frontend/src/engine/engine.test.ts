@@ -1,7 +1,9 @@
 // The browser fallback engine must agree with FAO-56 and keep the same hard constraints
 // as the CP-SAT model (mirrors backend/tests/test_agronomy.py and test_optimiser.py).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import parity from '@shared/fixtures/engine-parity.json'
 import {
+  assessFarm,
   atmosphericPressure,
   effectiveRain,
   et0PenmanMonteith,
@@ -13,7 +15,7 @@ import {
 } from './fao56'
 import { greedy, type Problem } from './heuristic'
 import { planInBrowser } from './plan'
-import { FEEDER } from './scenario'
+import { FARMS, FEEDER } from './scenario'
 import { solarPosition } from './solar'
 
 describe('FAO-56', () => {
@@ -158,5 +160,39 @@ describe('planInBrowser', () => {
     const wet = await planInBrowser({ date: '2026-03-12', failure: 'weather_api', weatherMode: 'rain', rainMm: 18, rainProb: 85, rainStartHour: 15 })
     expect(wet.totals.farmsDeferred).toBeGreaterThan(dry.totals.farmsDeferred)
     expect(wet.sunshift.metrics.waterM3).toBeLessThan(dry.sunshift.metrics.waterM3)
+  })
+})
+
+// The same inputs through both engines must give the same answers (fixture written by
+// backend/tests/parity.py; regenerate it there after an intended engine change).
+describe('parity with the Python engine', () => {
+  const close = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))
+
+  it('computes the same ET0', () => {
+    for (const { input, output } of parity.et0) {
+      const r = et0PenmanMonteith(input as Parameters<typeof et0PenmanMonteith>[0])
+      for (const k of ['et0', 'ea', 'es', 'rn', 'rnl'] as const) expect(close(r[k], output[k]), `${k} for ${JSON.stringify(input)}`).toBe(true)
+    }
+  })
+
+  it('assesses every farm the same way', () => {
+    for (const { input, output } of parity.assess) {
+      const farm = FARMS.find((f) => f.id === input.farmId)!
+      const r = assessFarm({ farm, das: input.das, drStart: input.drStart, et0: input.et0, rainForecastMm: input.rainForecastMm, rainProb: input.rainProb, availableSlotCount: input.availableSlotCount })
+      const where = `farm ${input.farmId} at ET0 ${input.et0}, rain ${input.rainForecastMm} mm`
+      expect(r.requiredSlots, where).toBe(output.requiredSlots)
+      expect(r.deferred, where).toBe(output.deferred)
+      expect(r.status, where).toBe(output.status)
+      for (const [mine, theirs] of [[r.kc, output.kc], [r.taw, output.taw], [r.raw, output.raw], [r.needNetMm, output.needNetMm], [r.needAfterRainMm, output.needAfterRainMm]]) {
+        expect(close(mine, theirs), where).toBe(true)
+      }
+    }
+  })
+
+  it('builds the same greedy schedules', () => {
+    for (const { problem, on } of parity.greedy) {
+      const mine = greedy(problem as Problem)
+      for (const [id, slots] of Object.entries(on)) expect(mine[Number(id)], `farm ${id}`).toEqual(slots)
+    }
   })
 })

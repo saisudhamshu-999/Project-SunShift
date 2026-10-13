@@ -1,0 +1,66 @@
+# Runs on every push and pull request: backend tests on SQLite and PostgreSQL, frontend
+# typecheck, tests and build, and a full Docker image build with a smoke test.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: sunshift
+          POSTGRES_PASSWORD: sunshift
+          POSTGRES_DB: sunshift_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sunshift -d sunshift_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://sunshift:sunshift@localhost:5432/sunshift_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r requirements.txt pytest==9.1.1
+      - run: python -m pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t sunshift .
+      - name: Smoke test the image
+        run: |
+          docker run -d --name sunshift -p 8000:8000 sunshift
+          for i in $(seq 1 30); do curl -fs http://localhost:8000/api/health && break; sleep 2; done
+          curl -fs http://localhost:8000/api/health | grep '"registry":"database"'
+          curl -fs http://localhost:8000/ | grep -q '<div id="root">'
+          docker logs sunshift

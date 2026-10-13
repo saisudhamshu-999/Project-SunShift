@@ -9,6 +9,10 @@ export type Binding = 'NONE' | 'SOLAR' | 'FEEDER' | 'AVAILABILITY'
 
 export interface PlanRequest {
   date?: string
+  /** Registry feeder id; the server's default feeder when omitted. */
+  feeder?: string
+  /** Solve again instead of reusing a recent identical result. */
+  fresh?: boolean
   location?: string
   pvKwp?: number
   feederLimitKw?: number
@@ -208,6 +212,27 @@ export interface SolarProfileOut {
   energyKwh: number
   clearSkyEnergyKwh: number
   peakKw: number
+  /** Cautious (P10) solar from the ML correction, when it applies to this plan. */
+  cautiousAcKw?: number[]
+  cautiousEnergyKwh?: number
+  loadAboveCautiousKwh?: number
+}
+
+/** What the ML weather corrections did for one plan. */
+export interface MlInfo {
+  solar: { applied: boolean; reason?: string; model?: string; forecastKwhM2?: number; likelyKwhM2?: number; cautiousKwhM2?: number; riskNote?: string }
+  rain: { applied: boolean; reason?: string; model?: string; forecastProb?: number; calibratedProb?: number; forecastMm?: number }
+}
+
+/** GET /api/ml: how the models were trained and how they did on the held-out year. */
+export interface MlCard {
+  version: string
+  data: { forecast: string; observed: string; locations: string[]; train: [string, string]; test: [string, string] }
+  solar: { hourlyRmseRaw: number; hourlyRmseLikely: number; dailyEnergyMaeRaw: number; dailyEnergyMaeLikely: number; biasRaw: number; biasLikely: number; belowCautious: number; cautiousTarget: number }
+  rain: { days: number; calibrated: { brier: number; wrongDeferrals: number; missedRain: number }; forecastYesNo: { brier: number; wrongDeferrals: number; missedRain: number } }
+  backtest: { days: number; perDay: Record<'raw' | 'ml', { gridKwh: number; waterM3: number; shortfallKwh: number; gridKwhPer100M3: number }> } | null
+  limitations: string[]
+  loaded: { solar: string | null; rain: string | null }
 }
 
 export interface PlanResult {
@@ -224,8 +249,10 @@ export interface PlanResult {
     slots: number
     slotLabels: string[]
     params: Record<string, unknown>
-    sources: { weather: WeatherSource; weatherDetail: string; solar: string; farms: string; pumps: string }
+    sources: { weather: WeatherSource; weatherDetail: string; solar: string; farms: string; pumps: string; registry?: string }
     failure: FailureKind | null
+    /** Absent on browser-fallback plans. */
+    ml?: MlInfo
     notes: string[]
     fixedUntil: number
   }
@@ -401,8 +428,26 @@ export interface Health {
   ortools: string
   pvlib: string
   db: string
+  registry?: 'database' | 'file'
+  ml?: { solar: string | null; rain: string | null }
+  jobs?: { workers: number; running: number; queued: number; capacity: number; completed: number; failed: number }
   time: string
   defaultPlanDate: string
+}
+
+export type JobKind = 'plan' | 'sensitivity' | 'fairness' | 'rain-event'
+
+/** A solver job (POST /api/jobs, GET /api/jobs/{id}). */
+export interface Job<T> {
+  id: string
+  kind: JobKind
+  status: 'queued' | 'running' | 'done' | 'failed'
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
+  result: T | null
+  error: string | null
+  cached: boolean
 }
 
 export interface RunRow {

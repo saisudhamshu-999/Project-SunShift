@@ -13,7 +13,8 @@ interface PlanState {
   runs: number
   setParams: (p: Partial<PlanRequest>, opts?: { debounceMs?: number }) => void
   resetParams: () => void
-  run: () => Promise<PlanResult | null>
+  /** Solve with the current params; ``fresh`` skips reuse of a recent identical result. */
+  run: (opts?: { fresh?: boolean }) => Promise<PlanResult | null>
   ensure: () => void
   /** Replace the current plan with an in-day re-plan computed elsewhere. */
   adopt: (result: PlanResult, engine: Engine) => void
@@ -41,13 +42,13 @@ export const usePlan = create<PlanState>((set, get) => ({
     set({ params: { ...DEFAULT_PARAMS } })
     void get().run()
   },
-  run: async () => {
+  run: async (opts) => {
     ctrl?.abort()
     ctrl = new AbortController()
     const id = ++seq
     set({ status: 'loading', error: null })
     try {
-      const { data, engine } = await api.plan(get().params, ctrl.signal)
+      const { data, engine } = await api.plan(opts?.fresh ? { ...get().params, fresh: true } : get().params, ctrl.signal)
       if (id !== seq) return null
       useUi.getState().setApi(engine === 'cp-sat' ? useUi.getState().health ?? (await api.health()) : null)
       set({ result: data, engine, status: 'ready', runs: get().runs + 1 })

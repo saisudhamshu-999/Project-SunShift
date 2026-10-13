@@ -5,6 +5,7 @@ import type { PlanRequest, PlanResult, RunRow } from '@/api/types'
 import { Convergence } from '@/components/charts/Convergence'
 import { Gantt, type GanttRow } from '@/components/charts/Gantt'
 import { ConstraintMonitor } from '@/components/dashboard/ConstraintMonitor'
+import { ForecastModels } from '@/components/dashboard/ForecastModels'
 import { FarmLabelOverlay } from '@/components/dashboard/FarmLabelOverlay'
 import { KpiStrip } from '@/components/dashboard/KpiStrip'
 import { ScenarioControls } from '@/components/dashboard/ScenarioControls'
@@ -81,7 +82,7 @@ function Header({ plan }: { plan: PlanResult | null }) {
               </span>
             )
           )}
-          <button className="btn h-9 border border-ivory/25 px-4 text-[13px] text-ivory hover:bg-ivory/10" onClick={() => void run()} disabled={status === 'loading'}>
+          <button className="btn h-9 border border-ivory/25 px-4 text-[13px] text-ivory hover:bg-ivory/10" onClick={() => void run({ fresh: true })} disabled={status === 'loading'}>
             Re-optimise
           </button>
           <button className="btn h-9 px-3 text-[13px] text-ivory/70 hover:bg-ivory/10" onClick={toggleSound} aria-pressed={soundOn}>
@@ -98,16 +99,30 @@ function Header({ plan }: { plan: PlanResult | null }) {
 
 function SolarStrip({ plan, cursor }: { plan: PlanResult; cursor: number }) {
   const max = Math.max(1, ...plan.solar.acKw)
+  const cautious = plan.solar.cautiousAcKw
   return (
-    <div className="ml-[64px] flex h-12 items-end gap-[2px]" role="img" aria-label="Solar power by 15-minute slot">
-      {plan.solar.acKw.map((v, i) => {
-        const load = plan.sunshift.loadKw[i] ?? 0
-        return (
-          <span key={i} className="relative flex-1 rounded-t-[2px]" style={{ height: `${Math.max(3, (v / max) * 100)}%`, background: i === cursor ? '#ffc93c' : 'rgb(242 169 0 / 0.55)' }} title={`${clockFromSlot(i)}: ${fmt(v, 1)} kW solar, ${fmt(load, 1)} kW pumps`}>
-            <span className="absolute inset-x-0 bottom-0 rounded-t-[2px] bg-ivory/70" style={{ height: `${Math.min(100, (load / Math.max(v, 1)) * 100)}%` }} />
-          </span>
-        )
-      })}
+    <div className="ml-[64px]">
+      <div className="flex h-12 items-end gap-[2px]" role="img" aria-label={cautious ? 'Likely and cautious solar power, and pump load, by 15-minute slot' : 'Solar power by 15-minute slot'}>
+        {plan.solar.acKw.map((v, i) => {
+          const load = plan.sunshift.loadKw[i] ?? 0
+          const low = cautious?.[i]
+          return (
+            <span key={i} className="relative h-full flex-1" title={`${clockFromSlot(i)}: ${fmt(v, 1)} kW solar${low != null ? ` (cautious ${fmt(low, 1)})` : ''}, ${fmt(load, 1)} kW pumps`}>
+              <span className="absolute inset-x-0 bottom-0 rounded-t-[2px]" style={{ height: `${Math.max(3, (v / max) * 100)}%`, background: i === cursor ? '#ffc93c' : 'rgb(242 169 0 / 0.55)' }}>
+                <span className="absolute inset-x-0 bottom-0 rounded-t-[2px] bg-ivory/70" style={{ height: `${Math.min(100, (load / Math.max(v, 1)) * 100)}%` }} />
+              </span>
+              {low != null && v > 0.5 && <span className="absolute inset-x-0 h-[2px] bg-water-2" style={{ bottom: `${(low / max) * 100}%` }} aria-hidden />}
+            </span>
+          )
+        })}
+      </div>
+      {cautious && (
+        <p className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-ivory/50">
+          <span><i className="mr-1.5 inline-block h-2 w-3 rounded-sm bg-sun/60 align-middle" aria-hidden />Likely solar (ML-corrected)</span>
+          <span><i className="mr-1.5 inline-block h-[2px] w-3 bg-water-2 align-middle" aria-hidden />Cautious solar (P10)</span>
+          <span><i className="mr-1.5 inline-block h-2 w-3 rounded-sm bg-ivory/70 align-middle" aria-hidden />Pumps</span>
+        </p>
+      )}
     </div>
   )
 }
@@ -365,6 +380,9 @@ export default function LiveApp() {
                       <Convergence points={plan.sunshift.solver.convergence} timeLimit={plan.sunshift.solver.timeLimitS} />
                     </div>
                   )}
+                </div>
+                <div className="border-t border-ivory/10 pt-4">
+                  <ForecastModels plan={plan} />
                 </div>
                 <div className="border-t border-ivory/10 pt-4">
                   <p className="kicker text-ivory/50">Recent runs (database)</p>

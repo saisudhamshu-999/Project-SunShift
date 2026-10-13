@@ -9,7 +9,10 @@ from dataclasses import dataclass, field, replace
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 
-from .. import db
+import numpy as np
+
+from .. import db, registry
+from ..ml import models as ml_models
 from . import baseline, explain, metrics
 from .agronomy import FarmAgronomy, assess_farm, root_depth, total_available_water
 from .optimiser import Job, Problem, Solution, solve
@@ -17,7 +20,6 @@ from .scenario import (
     Scenario,
     available_slots,
     contiguous_blocks,
-    load_scenario,
     slot_label,
     window_label,
     with_overrides,
@@ -33,6 +35,7 @@ FAILURES = ("weather_api", "solar_forecast", "internet", "pump_feedback", "capac
 @dataclass
 class PlanParams:
     date: str | None = None
+    feeder: str | None = None
     location: str | None = None
     pv_kwp: float | None = None
     feeder_limit_kw: float | None = None
@@ -75,6 +78,8 @@ class DayContext:
     allowed: dict[int, list[int]]
     jobs: list[Job]
     notes: list[str]
+    ml: dict = field(default_factory=dict)
+    solar_low_kw: np.ndarray | None = None  # cautious (P10) AC curve, when the ML band applies
 
 
 def ist_now() -> datetime:
@@ -116,8 +121,10 @@ def _weather_for(day: str, sc: Scenario, loc_id: str, params: PlanParams) -> tup
     return dw, notes
 
 
-def build_context(params: PlanParams) -> DayContext:
-    base_sc = load_scenario()
+def build_context(params: PlanParams, weather: DayWeather | None = None) -> DayContext:
+    """Everything a solve needs. ``weather`` replaces the weather lookup (backtests, tests)."""
+    day = params.date or default_plan_date()
+    base_sc = registry.scenario(params.feeder, day)
     sc = with_overrides(
         base_sc,
         pv_kwp=params.pv_kwp,
@@ -128,9 +135,13 @@ def build_context(params: PlanParams) -> DayContext:
     )
     loc_id = params.location if params.location in sc.locations else sc.default_location
     loc = sc.locations[loc_id]
-    day = params.date or default_plan_date()
 
-    base_dw, notes = _weather_for(day, sc, loc_id, params)
+    if weather is not None:
+        base_dw, notes = weather, []
+    else:
+        base_dw, notes = _weather_for(day, sc, loc_id, params)
+    # ML corrections apply to real forecasts only (see app/ml).
+    base_dw, low_ratio, ml_info = ml_models.apply_to_forecast(base_dw, loc, sc.feeder)
     mode = params.weather_mode if params.weather_mode in WEATHER_MODES else "live"
     solar_event = params.solar_event
     if params.failure == "solar_forecast" and not solar_event:
@@ -141,6 +152,12 @@ def build_context(params: PlanParams) -> DayContext:
         rain_start_hour=params.rain_start_hour, solar_event=solar_event,
     )
     pv = pv_profile(dw, loc, sc.feeder)
+    solar_low = None
+    if low_ratio is not None:
+        if mode == "live":
+            solar_low = pv.ac_kw * low_ratio
+        else:
+            ml_info["solar"]["riskNote"] = f"cautious curve not used: '{mode}' is a scenario, not the forecast"
 
     ags: dict[int, FarmAgronomy] = {}
     prios: dict[int, dict] = {}
@@ -166,7 +183,7 @@ def build_context(params: PlanParams) -> DayContext:
         ))
     if params.failure == "capacity":
         notes.append("Failure drill: demand exceeds what the feeder can serve; fair allocation applies")
-    return DayContext(sc, params, loc_id, day, dw, base_dw, pv, ags, prios, allowed, jobs, notes)
+    return DayContext(sc, params, loc_id, day, dw, base_dw, pv, ags, prios, allowed, jobs, notes, ml_info, solar_low)
 
 
 def _problem(ctx: DayContext, *, mode: str | None = None, time_limit: float | None = None,
@@ -181,6 +198,7 @@ def _problem(ctx: DayContext, *, mode: str | None = None, time_limit: float | No
     return Problem(
         jobs=jobs,
         solar_kw=[float(v) * solar_scale for v in ctx.pv.ac_kw],
+        solar_low_kw=None if ctx.solar_low_kw is None else [float(v) * solar_scale for v in ctx.solar_low_kw],
         feeder_limit_kw=sc.feeder.feeder_limit_kw * feeder_scale,
         grid_cap_kw=sc.feeder.grid_backup_kw + grid_extra,
         slots=sc.feeder.slots,
@@ -298,6 +316,18 @@ def _farm_payload(ctx: DayContext, sol: Solution, unc_plans: dict[int, list[int]
     return out
 
 
+def _solar_payload(ctx: DayContext, sol: Solution) -> dict:
+    out = ctx.pv.to_dict(ctx.sc.feeder.slot_hours)
+    if ctx.solar_low_kw is not None:
+        h = ctx.sc.feeder.slot_hours
+        low = np.asarray(ctx.solar_low_kw, dtype=float)
+        out["cautiousAcKw"] = [round(float(v), 2) for v in low]
+        out["cautiousEnergyKwh"] = round(float(low.sum() * h), 1)
+        # Pumping the plan puts above the cautious curve: what would need grid power on a dim day.
+        out["loadAboveCautiousKwh"] = round(float(np.clip(np.asarray(sol.load_kw) - low, 0, None).sum() * h), 1)
+    return out
+
+
 def assemble(ctx: DayContext, sol: Solution) -> dict:
     sc = ctx.sc
     farms_by_id = {f.id: f for f in sc.farms}
@@ -332,11 +362,13 @@ def assemble(ctx: DayContext, sol: Solution) -> dict:
             "sources": {
                 "weather": ctx.dw.source,
                 "weatherDetail": ctx.dw.source_detail,
-                "solar": "pvlib",
-                "farms": "simulation",
+                "solar": "pvlib + ML correction" if ctx.ml.get("solar", {}).get("applied") else "pvlib",
+                "farms": "simulation" if ctx.sc.all_simulated else "registry",
+                "registry": ctx.sc.registry,
                 "pumps": "simulation",
             },
             "failure": params.failure,
+            "ml": ctx.ml,
             "notes": ctx.notes + ctx.dw.modifications,
             "fixedUntil": params.fixed_until,
         },
@@ -348,7 +380,7 @@ def assemble(ctx: DayContext, sol: Solution) -> dict:
             "minRunSlots": sc.feeder.min_run_slots, "maxStarts": sc.feeder.max_starts,
         },
         "weather": ctx.dw.to_dict(),
-        "solar": ctx.pv.to_dict(sc.feeder.slot_hours),
+        "solar": _solar_payload(ctx, sol),
         "farms": _farm_payload(ctx, sol, unc_on, m_sun, m_unc),
         "sunshift": {"metrics": m_sun, "solver": sol.stats(), "loadKw": sol.load_kw, "gridKw": sol.grid_kw},
         "uncoordinated": {"metrics": m_unc},

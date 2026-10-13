@@ -1,6 +1,9 @@
 import type {
   FairnessResult,
   Health,
+  Job,
+  JobKind,
+  MlCard,
   PlanRequest,
   PlanResult,
   RainEventResult,
@@ -13,6 +16,8 @@ import type {
 const BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? ''
 
 export class ApiUnavailable extends Error {}
+/** The API is up but refused this request for now (rate limit or full solver queue). */
+export class ApiBusy extends ApiUnavailable {}
 
 async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   const ctrl = new AbortController()
@@ -21,6 +26,7 @@ async function request<T>(path: string, init: RequestInit & { timeoutMs?: number
   init.signal?.addEventListener('abort', onAbort)
   try {
     const res = await fetch(`${BASE}${path}`, { ...init, signal: ctrl.signal })
+    if (res.status === 429) throw new ApiBusy(`API busy, retry after ${res.headers.get('retry-after') ?? '?'} s`)
     if (res.status >= 500 || res.status === 404 || res.status === 502 || res.status === 503) {
       throw new ApiUnavailable(`API ${res.status}`)
     }
@@ -69,7 +75,8 @@ async function withFallback<T>(apiCall: () => Promise<T>, browserCall: () => Pro
       return { data: await apiCall(), engine: 'cp-sat' }
     } catch (err) {
       if (!(err instanceof ApiUnavailable)) throw err
-      healthPromise = Promise.resolve(null)
+      // A busy server is still up: fall back for this request only.
+      if (!(err instanceof ApiBusy)) healthPromise = Promise.resolve(null)
     }
   }
   return { data: await browserCall(), engine: 'heuristic' }
@@ -77,32 +84,69 @@ async function withFallback<T>(apiCall: () => Promise<T>, browserCall: () => Pro
 
 const browser = () => import('@/engine/plan')
 
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => {
+      clearTimeout(t)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+/** Queue a solve on the server and poll until it finishes. Solves never hold a request open. */
+async function viaJob<T>(kind: JobKind, params: object, signal?: AbortSignal, timeoutMs = 90000): Promise<T> {
+  let job = await post<Job<T>>('/api/jobs', { kind, params }, signal, 15000)
+  const deadline = Date.now() + timeoutMs
+  let delay = 200
+  while (job.status === 'queued' || job.status === 'running') {
+    if (Date.now() > deadline) throw new ApiUnavailable(`job ${job.id} timed out`)
+    await sleep(delay, signal)
+    delay = Math.min(1000, delay * 1.5)
+    job = await request<Job<T>>(`/api/jobs/${job.id}`, { signal, timeoutMs: 10000 })
+  }
+  // A failed solve falls back to the (labelled) browser engine, as an unreachable API does.
+  if (job.status === 'failed' || !job.result) throw new ApiUnavailable(job.error ?? 'solver failed')
+  return job.result
+}
+
 export function plan(req: PlanRequest, signal?: AbortSignal) {
   return withFallback<PlanResult>(
-    () => post('/api/plan', req, signal),
+    () => viaJob<PlanResult>('plan', req, signal),
     async () => (await browser()).planInBrowser(req, signal),
   )
 }
 
 export function sensitivity(req: PlanRequest, signal?: AbortSignal) {
   return withFallback<SensitivityResult>(
-    () => post('/api/sensitivity', { ...req, persist: false }, signal),
+    () => viaJob<SensitivityResult>('sensitivity', { ...req, persist: false }, signal),
     async () => (await browser()).sensitivityInBrowser(req),
   )
 }
 
 export function fairness(req: PlanRequest, signal?: AbortSignal) {
   return withFallback<FairnessResult>(
-    () => post('/api/fairness', { ...req, persist: false }, signal),
+    () => viaJob<FairnessResult>('fairness', { ...req, persist: false }, signal),
     async () => (await browser()).fairnessInBrowser(req),
   )
 }
 
 export function rainEvent(req: PlanRequest & { forecastSlot?: number }, signal?: AbortSignal) {
   return withFallback<RainEventResult>(
-    () => post('/api/rain-event', { ...req, persist: false }, signal),
+    () => viaJob<RainEventResult>('rain-event', { ...req, persist: false }, signal),
     async () => (await browser()).rainEventInBrowser(req, req.forecastSlot ?? 20),
   )
+}
+
+let mlCardPromise: Promise<MlCard | null> | null = null
+
+/** The trained models' card (held-out metrics); null when the API or the models are unavailable. */
+export function mlCard(): Promise<MlCard | null> {
+  mlCardPromise ??= request<MlCard>('/api/ml', { timeoutMs: 5000 }).catch(() => {
+    mlCardPromise = null
+    return null
+  })
+  return mlCardPromise
 }
 
 export async function runs(limit = 12): Promise<RunRow[]> {

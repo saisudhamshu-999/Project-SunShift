@@ -116,14 +116,17 @@ export function pumpFlowM3h(kw: number, headM: number): number {
   return ((kw * 1000 * SCENARIO.pump_model.wire_to_water_efficiency) / (RHO_G * headM)) * 3600
 }
 
+const round3 = (v: number) => Math.round(v * 1000) / 1000
+
 export const FARMS: FarmDef[] = SCENARIO.farms.map((f) => {
   const kw = pumpElectricalKw(f.pump_hp)
   return {
     ...f,
     available: f.available as [number, number][],
     pos: f.pos as [number, number],
-    pumpKw: kw,
-    flowM3h: pumpFlowM3h(kw, f.head_m),
+    // Rounded exactly as backend/app/engine/scenario.py does, so both engines agree.
+    pumpKw: round3(kw),
+    flowM3h: round3(pumpFlowM3h(kw, f.head_m)),
     code: `F${String(f.id).padStart(2, '0')}`,
   }
 })

@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest==9.1.1
+# Bundled PostgreSQL for the API tests (CI uses TEST_DATABASE_URL instead)
+pgserver==0.1.4

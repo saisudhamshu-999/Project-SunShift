@@ -28,6 +28,7 @@ from .agronomy import (
 )
 from .optimiser import Job, Problem, solve
 from .planner import ist_now
+from .. import registry
 from .scenario import available_slots, load_scenario, with_overrides
 from .solar import pv_profile
 from .weather import climatological_et0, replay_days
@@ -92,7 +93,9 @@ def _clamp_days(start: str, days: int) -> int:
 
 def simulate(params: SeasonParams) -> Iterator[dict]:
     t_start = time.perf_counter()
-    base_sc = load_scenario()
+    file_sc = load_scenario()
+    season_def = next((s for s in file_sc.seasons if s["id"] == params.season), file_sc.seasons[0])
+    base_sc = registry.scenario(day=params.start or season_def["start"])
     sc = with_overrides(
         base_sc, pv_kwp=params.pv_kwp, feeder_limit_kw=params.feeder_limit_kw,
         grid_backup_kw=params.grid_backup_kw, crop_overrides=params.crop_overrides,

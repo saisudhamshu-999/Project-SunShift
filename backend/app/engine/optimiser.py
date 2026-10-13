@@ -15,6 +15,7 @@ Objective, solved lexicographically
   Phase 2  keep that floor, then maximise
              priority-weighted served fraction        (agronomy: who needs water most)
            - grid import                              (run on the sun)
+           - load above the cautious solar curve      (when an ML P10 curve is given)
            - peak load, pump starts                   (feeder health, motor wear)
            + small bonus for high-solar slots         (robustness to forecast error)
 
@@ -41,6 +42,7 @@ W_GRID = 4
 W_PEAK = 1
 W_START = 30
 W_SOLAR_BONUS = 3
+W_RISK = 2  # per 100 W of load above the cautious (P10) solar curve: half the weight of firm grid import
 PHASE1_SHARE = 0.35  # share of the time budget spent on the fairness floor
 
 
@@ -71,6 +73,8 @@ class Problem:
     time_limit_s: float = 3.0
     workers: int = 8
     seed: int = 7
+    # Cautious (P10) solar curve from the ML forecast correction; None plans on solar_kw alone.
+    solar_low_kw: list[float] | None = None
     # Stop once the incumbent is provably within this relative gap of the best bound.
     # CP-SAT then reports OPTIMAL; the UI always shows the actual gap alongside it.
     gap_limit: float = 5e-4
@@ -161,6 +165,7 @@ class _Built:
     floor: cp_model.IntVar | None
     floors: list  # (j or None, fixed share or None, carried share)
     grid: dict  # t -> IntVar
+    risk: dict  # t -> IntVar, load above the cautious solar curve
     peak: cp_model.IntVar
     service: list  # (weight, fraction var)
     secondary: object  # linear expression: bonus - grid - peak - starts
@@ -170,6 +175,7 @@ class _Built:
     S: list[int]
     G: int
     s_max: float
+    SL: list[int] | None
 
 
 def _build(p: Problem) -> _Built:
@@ -256,6 +262,8 @@ def _build(p: Problem) -> _Built:
                 water_terms.append(int(round(job.flow_m3h * 10)) * xt)
 
     grid: dict = {}
+    risk: dict = {}
+    SL = [solar_units(s) for s in p.solar_low_kw] if p.solar_low_kw is not None else None
     peak = m.new_int_var(0, max(F, 0), "peak")
     for t in range(t0, T):
         active = [(j, job) for j, job in enumerate(p.jobs) if not isinstance(x[j, t], int)]
@@ -268,6 +276,10 @@ def _build(p: Problem) -> _Built:
             g = m.new_int_var(0, G, f"g_{t}")
             m.add(g >= load - S[t])
             grid[t] = g
+        if SL is not None and sum(units(job.power_kw) for _, job in active) > SL[t]:
+            r = m.new_int_var(0, max(F, 0), f"r_{t}")
+            m.add(r >= load - SL[t])
+            risk[t] = r
 
     floor = None
     if fracs:
@@ -277,9 +289,10 @@ def _build(p: Problem) -> _Built:
             m.add(2 * floor <= (fracs[j] if j is not None else share) + carried)
 
     grid_sum = sum(grid.values())
-    secondary = sum(bonus_terms) - W_GRID * grid_sum - W_PEAK * peak - W_START * sum(starts.values())
-    return _Built(m, x, starts, fracs, floor, floors, grid, peak, service, secondary, sum(water_terms), grid_sum,
-                  n_bool, S, G, s_max)
+    secondary = (sum(bonus_terms) - W_GRID * grid_sum - W_RISK * sum(risk.values()) - W_PEAK * peak
+                 - W_START * sum(starts.values()))
+    return _Built(m, x, starts, fracs, floor, floors, grid, risk, peak, service, secondary, sum(water_terms), grid_sum,
+                  n_bool, S, G, s_max, SL)
 
 
 def _configure(solver: cp_model.CpSolver, p: Problem, time_limit: float, gap: float) -> None:
@@ -328,10 +341,15 @@ def _complete_hint(built: _Built, p: Problem, on: dict[int, list[int]]) -> tuple
         val = min(built.G, max(0, loads[t] - built.S[t]))
         vals.append((g, val))
         grid_total += val
+    risk_total = 0
+    for t, r in built.risk.items():
+        val = max(0, loads[t] - built.SL[t])
+        vals.append((r, val))
+        risk_total += val
     peak_val = max((loads[t] for t in range(p.fixed_until, T)), default=0)
     vals.append((built.peak, peak_val))
     service = sum(p.jobs[j].weight * fvals[j] for j in fvals)
-    objective = service + bonus - W_GRID * grid_total - W_PEAK * peak_val - W_START * n_starts
+    objective = service + bonus - W_GRID * grid_total - W_RISK * risk_total - W_PEAK * peak_val - W_START * n_starts
     return vals, {"floor": floor_val, "objective": objective, "throughput": water - W_GRID * grid_total}
 
 

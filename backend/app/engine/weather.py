@@ -93,6 +93,9 @@ class DayWeather:
     sunset: str | None = None
     hourly: list[dict[str, float]] = field(default_factory=list)
     modifications: list[str] = field(default_factory=list)
+    # Hourly forecast rain (mm) and cloud cover (%) over the rain look-ahead window, for the ML rain model
+    lookahead_precip: list[float] = field(default_factory=list)
+    lookahead_cloud: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         r = lambda a, n=1: [round(float(x), n) for x in a]  # noqa: E731
@@ -312,6 +315,7 @@ def _assemble_day(
     end_i = min(len(times), start_i + int(policy.rain_lookahead_h))
     look = _clean([hourly["precipitation"][i] for i in range(start_i, end_i)])
     look_mm = float(look.sum())
+    look_cloud = _clean([hourly["cloud_cover"][i] for i in range(start_i, end_i)])
     if "precipitation_probability" in hourly:
         look_prob = float(np.max(_clean([hourly["precipitation_probability"][i] for i in range(start_i, end_i)])))
     else:
@@ -335,6 +339,7 @@ def _assemble_day(
         rh_mean=rh_mean, u2=u2, rs=rs, rain_mm=rain, rain_prob=rain_prob, et0=et.et0, et0_reference=et0_ref,
         et0_parts=et.as_dict(), lookahead_rain_mm=look_mm, lookahead_rain_prob=look_prob,
         sunrise=sunrise, sunset=sunset, hourly=hourly_rows,
+        lookahead_precip=[float(v) for v in look], lookahead_cloud=[float(v) for v in look_cloud],
     )
 
 

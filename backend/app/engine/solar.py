@@ -80,6 +80,18 @@ def _ac_power(
     )
 
 
+def ac_from_ghi(day: str, loc: Location, feeder: Feeder, ghi, temp_air, wind10) -> np.ndarray:
+    """AC output per slot for a GHI series alone: DNI and DHI are split off with Erbs.
+    Used for ML solar curves and backtests, where only GHI is known."""
+    times = slot_times(day, feeder)
+    solpos = pvlib.solarposition.get_solarposition(times, loc.lat, loc.lon, altitude=loc.elevation_m)
+    ghi = np.clip(np.asarray(ghi, dtype=float), 0, None)
+    split = pvlib.irradiance.erbs(ghi, solpos["zenith"].to_numpy(), times)
+    _, _, _, ac = _ac_power(feeder=feeder, times=times, solpos=solpos, ghi=ghi, dni=np.nan_to_num(np.asarray(split["dni"])),
+                            dhi=np.nan_to_num(np.asarray(split["dhi"])), temp_air=temp_air, wind=wind10)
+    return ac
+
+
 def pv_profile(dw: DayWeather, loc: Location, feeder: Feeder) -> SolarProfile:
     times = slot_times(dw.date, feeder)
     solpos = pvlib.solarposition.get_solarposition(

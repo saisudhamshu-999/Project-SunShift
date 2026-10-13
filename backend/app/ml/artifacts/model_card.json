@@ -1,0 +1,143 @@
+{
+ "version": "2026.10",
+ "generatedAt": "2026-10-11T07:04:58+00:00",
+ "data": {
+  "forecast": "Open-Meteo Previous Runs API, day-ahead (previous_day1) best-match forecast",
+  "observed": "ERA5 reanalysis (Open-Meteo Historical Weather API): a model reconstruction, not station measurements",
+  "locations": [
+   "anantapur",
+   "jalna",
+   "rajkot",
+   "warangal"
+  ],
+  "train": [
+   "2024-01-20",
+   "2025-10-01"
+  ],
+  "test": [
+   "2025-10-01",
+   "2026-09-30"
+  ]
+ },
+ "solar": {
+  "hours": 16406,
+  "hourlyMaeRaw": 58.2,
+  "hourlyMaeLikely": 55.1,
+  "hourlyRmseRaw": 100.0,
+  "hourlyRmseLikely": 85.6,
+  "biasRaw": 25.4,
+  "biasLikely": 5.8,
+  "dailyEnergyMaeRaw": 0.496,
+  "dailyEnergyMaeLikely": 0.435,
+  "belowCautious": 0.12,
+  "belowCautiousBy25": 0.071,
+  "cautiousTarget": 0.1,
+  "conformalOffset": 0.0186,
+  "perLocation": {
+   "anantapur": {
+    "rmseRaw": 112.3,
+    "rmseLikely": 97.3
+   },
+   "jalna": {
+    "rmseRaw": 102.0,
+    "rmseLikely": 88.1
+   },
+   "rajkot": {
+    "rmseRaw": 83.5,
+    "rmseLikely": 71.2
+   },
+   "warangal": {
+    "rmseRaw": 100.4,
+    "rmseLikely": 84.1
+   }
+  },
+  "units": "W/m2 (hourly, daylight hours); daily energy in kWh/m2"
+ },
+ "rain": {
+  "days": 1456,
+  "rainDayRate": 0.146,
+  "threshold": 0.5,
+  "calibrated": {
+   "brier": 0.0694,
+   "logLoss": 0.221,
+   "calibrationError": 0.063,
+   "deferrals": 281,
+   "wrongDeferrals": 108,
+   "missedRain": 40
+  },
+  "forecastYesNo": {
+   "brier": 0.1092,
+   "logLoss": 1.006,
+   "calibrationError": 0.109,
+   "deferrals": 296,
+   "wrongDeferrals": 121,
+   "missedRain": 38
+  },
+  "climatology": {
+   "brier": 0.1206,
+   "logLoss": 0.368,
+   "calibrationError": 0.103,
+   "deferrals": 366,
+   "wrongDeferrals": 230,
+   "missedRain": 77
+  },
+  "reliability": [
+   {
+    "predicted": 0.027,
+    "observed": 0.016,
+    "days": 1015
+   },
+   {
+    "predicted": 0.288,
+    "observed": 0.122,
+    "days": 115
+   },
+   {
+    "predicted": 0.495,
+    "observed": 0.23,
+    "days": 87
+   },
+   {
+    "predicted": 0.695,
+    "observed": 0.395,
+    "days": 81
+   },
+   {
+    "predicted": 0.921,
+    "observed": 0.829,
+    "days": 158
+   }
+  ],
+  "trainRainDayRate": 0.263
+ },
+ "backtest": {
+  "days": 164,
+  "timeLimitS": 1.0,
+  "perDay": {
+   "raw": {
+    "gridKwh": 55.35,
+    "shortfallKwh": 6.41,
+    "waterM3": 1451.53,
+    "plannedWaterM3": 1471.67,
+    "loadAboveActualKwh": 61.76,
+    "gridKwhPer100M3": 3.81
+   },
+   "ml": {
+    "gridKwh": 51.56,
+    "shortfallKwh": 5.97,
+    "waterM3": 1435.97,
+    "plannedWaterM3": 1454.73,
+    "loadAboveActualKwh": 57.53,
+    "gridKwhPer100M3": 3.59
+   }
+  },
+  "note": "Demand from climatology for each date; solar from the archived day-ahead forecast (raw) or the ML curves (ml); both schedules replayed against ERA5 solar with the feeder's grid backup."
+ },
+ "limitations": [
+  "Trained on 20 months; forecast errors differ between years, so the cautious curve is somewhat optimistic on the held-out year (see belowCautious against its 10% target).",
+  "An upper (P90) band was tested and is not shipped: it was badly under-calibrated on the held-out year.",
+  "Rain fell on 15% of held-out days against 26% in training; in that drier year the rain model's mid-range probabilities were too high (see the reliability table), although it still beat the forecast's yes/no on every score.",
+  "Day-ahead forecasts (24 h+ lead) are used for training; same-day plans use fresher forecasts, so the corrections are, if anything, conservative for them.",
+  "ERA5 is the reference for 'what happened'; it has its own errors against ground stations."
+ ]
+}

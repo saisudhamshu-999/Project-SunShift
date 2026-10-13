@@ -20,6 +20,8 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 COPY shared ./shared
 COPY backend/app ./backend/app
+COPY backend/migrations ./backend/migrations
+COPY backend/alembic.ini ./backend/alembic.ini
 COPY --from=web /src/frontend/dist ./frontend/dist
 
 RUN useradd --create-home --uid 10001 sunshift \

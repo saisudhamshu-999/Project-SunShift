@@ -138,6 +138,10 @@ class Scenario:
     layout: dict[str, Any]
     pump_model: dict[str, Any]
     raw: dict[str, Any] = field(repr=False, compare=False)
+    # Where the farms came from: 'file' (shared/scenario.json) or 'database' (the registry),
+    # and whether every farm is simulated demo data.
+    registry: str = "file"
+    all_simulated: bool = True
 
     def farm(self, farm_id: int) -> Farm:
         for f in self.farms:
