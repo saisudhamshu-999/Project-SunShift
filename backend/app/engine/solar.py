@@ -65,19 +65,28 @@ def _ac_power(
         dni_extra=dni_extra,
         model="haydavies",
     )
-    poa_global = poa["poa_global"].fillna(0).clip(lower=0)
-    tcell = pvlib.temperature.faiman(poa_global, pd.Series(temp_air, index=times), pd.Series(wind, index=times))
-    pdc = pvlib.pvsystem.pvwatts_dc(poa_global, tcell, pdc0=feeder.pv_kwp * 1000, gamma_pdc=feeder.gamma_pdc)
-    pdc = pdc * (1 - feeder.system_losses)
+    poa_global = poa["poa_global"].fillna(0).clip(lower=0).to_numpy()
+    tcell, dc_kw, ac_kw = panel_output(poa_global, temp_air, wind, feeder)
+    return poa_global, tcell, dc_kw, ac_kw
+
+
+def panel_output(poa, temp_air, wind, feeder: Feeder) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Plane-of-array irradiance (W/m2) to (cell temperature C, DC kW, AC kW).
+
+    Cells run hot in Indian sun: Faiman's model (heating from irradiance, cooling by
+    wind) gives the cell temperature, and PVWatts derates DC power by ``gamma_pdc`` per C
+    above 25 C. Then wiring, soiling and mismatch losses, and the inverter's efficiency
+    curve and AC limit. frontend/src/engine/solar.ts mirrors this (checked by the
+    parity fixture).
+    """
+    poa = np.clip(np.asarray(poa, dtype=float), 0, None)
+    tcell = np.asarray(pvlib.temperature.faiman(poa, np.asarray(temp_air, dtype=float), np.asarray(wind, dtype=float)), dtype=float)
+    pdc = pvlib.pvsystem.pvwatts_dc(poa, tcell, pdc0=feeder.pv_kwp * 1000, gamma_pdc=feeder.gamma_pdc)
+    pdc = np.clip(np.asarray(pdc, dtype=float) * (1 - feeder.system_losses), 0, None)
     inv_pdc0 = feeder.inverter_kw * 1000 / 0.96
     pac = pvlib.inverter.pvwatts(pdc, pdc0=inv_pdc0, eta_inv_nom=0.96)
     pac = np.clip(np.nan_to_num(np.asarray(pac, dtype=float)), 0, feeder.inverter_kw * 1000)
-    return (
-        poa_global.to_numpy(),
-        np.asarray(tcell, dtype=float),
-        np.clip(np.asarray(pdc, dtype=float), 0, None) / 1000,
-        pac / 1000,
-    )
+    return tcell, pdc / 1000, pac / 1000
 
 
 def ac_from_ghi(day: str, loc: Location, feeder: Feeder, ghi, temp_air, wind10) -> np.ndarray:

@@ -1370,6 +1370,7 @@
       "weight": 17,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1410,6 +1411,7 @@
       "weight": 14,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1470,6 +1472,7 @@
       "weight": 44,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1530,6 +1533,7 @@
       "weight": 20,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1570,6 +1574,7 @@
       "weight": 38,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1614,6 +1619,7 @@
       "weight": 34,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1646,6 +1652,7 @@
       "weight": 19,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1698,6 +1705,7 @@
       "weight": 30,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1742,6 +1750,7 @@
       "weight": 48,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1802,6 +1811,7 @@
       "weight": 35,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1830,6 +1840,7 @@
       "weight": 17,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1866,6 +1877,7 @@
       "weight": 31,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1926,6 +1938,7 @@
       "weight": 8,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -1954,6 +1967,7 @@
       "weight": 33,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      }
     ],
@@ -2166,6 +2180,7 @@
       "weight": 28,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2198,6 +2213,7 @@
       "weight": 19,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2258,6 +2274,7 @@
       "weight": 18,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2318,6 +2335,7 @@
       "weight": 48,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2366,6 +2384,7 @@
       "weight": 37,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2426,6 +2445,7 @@
       "weight": 47,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2474,6 +2494,7 @@
       "weight": 15,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2534,6 +2555,7 @@
       "weight": 47,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2562,6 +2584,7 @@
       "weight": 10,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2606,6 +2629,7 @@
       "weight": 29,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2658,6 +2682,7 @@
       "weight": 28,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2718,6 +2743,7 @@
       "weight": 7,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2778,6 +2804,7 @@
       "weight": 43,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -2838,6 +2865,7 @@
       "weight": 7,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      }
     ],
@@ -2913,9 +2941,7 @@
      23,
      24,
      25,
-     26,
-     28,
-     29
+     26
     ],
     "3": [
      31,
@@ -3126,6 +3152,7 @@
       "weight": 14,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3186,6 +3213,7 @@
       "weight": 32,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        0,
        1
@@ -3249,6 +3277,7 @@
       "weight": 33,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3297,6 +3326,7 @@
       "weight": 36,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3329,6 +3359,7 @@
       "weight": 43,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3361,6 +3392,7 @@
       "weight": 33,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3405,6 +3437,7 @@
       "weight": 21,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        0,
        1
@@ -3440,6 +3473,7 @@
       "weight": 20,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3484,6 +3518,7 @@
       "weight": 29,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        0,
        1
@@ -3527,6 +3562,7 @@
       "weight": 49,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3559,6 +3595,7 @@
       "weight": 27,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        12,
        13
@@ -3606,6 +3643,7 @@
       "weight": 43,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": []
      },
      {
@@ -3646,6 +3684,7 @@
       "weight": 7,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        0,
        1
@@ -3685,6 +3724,7 @@
       "weight": 40,
       "minRun": 2,
       "maxStarts": 2,
+      "minOff": 2,
       "executed": [
        8,
        9
@@ -4339,6 +4379,248 @@
     "\u0c38\u0c28\u0c4d\u200c\u0c37\u0c3f\u0c2b\u0c4d\u0c1f\u0c4d \u00b7 \u0c2a\u0c4a\u0c32\u0c02 18",
     "\u0c08 \u0c30\u0c4b\u0c1c\u0c41 \u0c28\u0c40\u0c30\u0c41 \u0c05\u0c35\u0c38\u0c30\u0c02 \u0c32\u0c47\u0c26\u0c41. \u0c28\u0c47\u0c32\u0c32\u0c4b \u0c24\u0c17\u0c3f\u0c28\u0c02\u0c24 \u0c24\u0c47\u0c2e \u0c09\u0c02\u0c26\u0c3f."
    ]
+  }
+ ],
+ "pv": [
+  {
+   "input": {
+    "poa": 0.0,
+    "tAir": 25.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 25.0,
+    "dcKw": 0.0,
+    "acKw": 0.0
+   }
+  },
+  {
+   "input": {
+    "poa": 0.0,
+    "tAir": 25.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 25.0,
+    "dcKw": 0.0,
+    "acKw": 0.0
+   }
+  },
+  {
+   "input": {
+    "poa": 0.0,
+    "tAir": 42.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 42.0,
+    "dcKw": 0.0,
+    "acKw": 0.0
+   }
+  },
+  {
+   "input": {
+    "poa": 0.0,
+    "tAir": 42.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 42.0,
+    "dcKw": 0.0,
+    "acKw": 0.0
+   }
+  },
+  {
+   "input": {
+    "poa": 150.0,
+    "tAir": 25.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 30.277973258268823,
+    "dcKw": 15.177698803659394,
+    "acKw": 14.28555085965056
+   }
+  },
+  {
+   "input": {
+    "poa": 150.0,
+    "tAir": 25.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 28.29525483304042,
+    "dcKw": 15.291260984182777,
+    "acKw": 14.396506376055056
+   }
+  },
+  {
+   "input": {
+    "poa": 150.0,
+    "tAir": 42.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 47.27797325826882,
+    "dcKw": 14.204006803659393,
+    "acKw": 13.33403598292222
+   }
+  },
+  {
+   "input": {
+    "poa": 150.0,
+    "tAir": 42.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 45.295254833040424,
+    "dcKw": 14.317568984182778,
+    "acKw": 13.445027563612573
+   }
+  },
+  {
+   "input": {
+    "poa": 600.0,
+    "tAir": 25.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 46.1118930330753,
+    "dcKw": 57.08318085855031,
+    "acKw": 54.94355202977046
+   }
+  },
+  {
+   "input": {
+    "poa": 600.0,
+    "tAir": 25.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 38.18101933216169,
+    "dcKw": 58.90017574692443,
+    "acKw": 56.693501555546334
+   }
+  },
+  {
+   "input": {
+    "poa": 600.0,
+    "tAir": 42.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 63.1118930330753,
+    "dcKw": 53.18841285855032,
+    "acKw": 51.18886941671331
+   }
+  },
+  {
+   "input": {
+    "poa": 600.0,
+    "tAir": 42.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 55.18101933216169,
+    "dcKw": 55.005407746924426,
+    "acKw": 52.941127056783756
+   }
+  },
+  {
+   "input": {
+    "poa": 1000.0,
+    "tAir": 25.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 60.18648838845883,
+    "dcKw": 89.76439127375087,
+    "acKw": 86.25436500338327
+   }
+  },
+  {
+   "input": {
+    "poa": 1000.0,
+    "tAir": 25.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 46.968365553602816,
+    "dcKw": 94.81159929701231,
+    "acKw": 91.05887853076682
+   }
+  },
+  {
+   "input": {
+    "poa": 1000.0,
+    "tAir": 42.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 77.18648838845883,
+    "dcKw": 83.27311127375089,
+    "acKw": 80.06300318128196
+   }
+  },
+  {
+   "input": {
+    "poa": 1000.0,
+    "tAir": 42.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 63.968365553602816,
+    "dcKw": 88.3203192970123,
+    "acKw": 84.87820242299232
+   }
+  },
+  {
+   "input": {
+    "poa": 1150.0,
+    "tAir": 25.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 65.46446164672766,
+    "dcKw": 100.91140745953557,
+    "acKw": 95.0
+   }
+  },
+  {
+   "input": {
+    "poa": 1150.0,
+    "tAir": 25.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 50.26362038664324,
+    "dcKw": 107.58634007029879,
+    "acKw": 95.0
+   }
+  },
+  {
+   "input": {
+    "poa": 1150.0,
+    "tAir": 42.0,
+    "wind": 0.5
+   },
+   "output": {
+    "tCell": 82.46446164672766,
+    "dcKw": 93.44643545953555,
+    "acKw": 89.76017818114002
+   }
+  },
+  {
+   "input": {
+    "poa": 1150.0,
+    "tAir": 42.0,
+    "wind": 3.0
+   },
+   "output": {
+    "tCell": 67.26362038664324,
+    "dcKw": 100.12136807029879,
+    "acKw": 95.0
+   }
   }
  ]
 }

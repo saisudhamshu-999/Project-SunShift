@@ -89,7 +89,7 @@ function randomProblem(seed: number, scarce: boolean): Problem {
     return {
       farmId: i + 1, powerKw: pick([2.9, 4.8, 4.8, 7.2]), flowM3h: 9 + rnd() * 8,
       requiredSlots: Math.floor(rnd() * 29), allowed: Array.from({ length: b - a }, (_, k) => a + k),
-      weight: 5 + Math.floor(rnd() * 46), minRun: 2, maxStarts: 2, carry: 1,
+      weight: 5 + Math.floor(rnd() * 46), minRun: 2, maxStarts: 2, minOff: 2, carry: 1,
     }
   })
   const peak = scarce ? 35 : 75
@@ -112,6 +112,7 @@ function checkSchedule(p: Problem, on: Record<number, number[]>) {
     }
     expect(blocks.length).toBeLessThanOrEqual(job.maxStarts)
     for (const b of blocks) expect(b.length).toBeGreaterThanOrEqual(job.minRun)
+    for (let k = 1; k < blocks.length; k++) expect(blocks[k][0] - blocks[k - 1].at(-1)! - 1).toBeGreaterThanOrEqual(job.minOff ?? 1)
     for (const s of slots) load[s] += job.powerKw
   }
   for (let t = 0; t < p.slots; t++) {
@@ -202,6 +203,21 @@ describe('farmer SMS parity with the backend', () => {
     const { smsFor } = await import('@/components/farmer/messages')
     for (const { farm, lang, lines } of parity.sms) {
       expect(smsFor(farm as unknown as Parameters<typeof smsFor>[0], lang as 'en' | 'hi' | 'te').lines, `${farm.code} ${lang}`).toEqual(lines)
+    }
+  })
+})
+
+describe('solar PV parity with the backend', () => {
+  it('derates hot cells and clips at the inverter exactly as pvlib does', async () => {
+    const { acPower, cellTemperature } = await import('./solar')
+    const close = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b))
+    for (const { input, output } of parity.pv) {
+      const tCell = cellTemperature(input.poa, input.tAir, input.wind)
+      const { dcKw, acKw } = acPower(input.poa, tCell, FEEDER)
+      const where = `POA ${input.poa} W/m², air ${input.tAir} °C, wind ${input.wind} m/s`
+      expect(close(tCell, output.tCell), `${where}: cell ${tCell} vs ${output.tCell}`).toBe(true)
+      expect(close(dcKw, output.dcKw), `${where}: DC ${dcKw} vs ${output.dcKw}`).toBe(true)
+      expect(close(acKw, output.acKw), `${where}: AC ${acKw} vs ${output.acKw}`).toBe(true)
     }
   })
 })

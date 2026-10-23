@@ -63,6 +63,7 @@ export interface FeederDef {
   slots: number
   min_run_slots: number
   max_starts: number
+  min_off_slots: number
 }
 
 export interface LocationDef {

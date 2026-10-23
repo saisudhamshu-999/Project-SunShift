@@ -268,6 +268,7 @@ export interface PlanResult {
     connectedLoadKw: number
     minRunSlots: number
     maxStarts: number
+    minOffSlots?: number // absent in plans stored before it was reported
   }
   weather: DayWeather
   solar: SolarProfileOut

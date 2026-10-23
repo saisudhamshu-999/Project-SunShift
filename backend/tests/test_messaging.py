@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -64,8 +65,11 @@ def test_twilio_client_sends_and_reports_errors():
 
 @pytest.fixture
 def offline_weather(monkeypatch):
-    """Dispatch plans the real day; use climatology instead of the network."""
+    """Dispatch plans the real day; use climatology instead of the network, and a fixed
+    evening clock so the planning day is tomorrow with no pump slots already run (in the
+    afternoon a re-plan keeps the morning's slots, and the outcome would depend on the hour)."""
     monkeypatch.setattr(planner, "_weather_for", lambda day, sc, loc_id, params: (climatology_day(day, sc.locations[loc_id], sc.feeder), []))
+    monkeypatch.setattr(planner, "ist_now", lambda: datetime(2030, 1, 14, 18, 0, tzinfo=planner.IST))
 
 
 def _register(c, farm_id=7, lang="te"):
@@ -143,7 +147,8 @@ def test_skipping_removes_the_farm_for_the_day(make_client, offline_weather):
         assert r["action"] == "skipped" and r["reply"] == messaging.T["te"]["skipped"]
         plan = c.post("/api/plan", json={"date": day, "persist": False}).json()
         assert 7 not in [f["id"] for f in plan["farms"]]
-        other_day = c.post("/api/plan", json={"date": "2030-01-15", "persist": False}).json()
+        next_day = (datetime.fromisoformat(day) + timedelta(days=1)).date().isoformat()
+        other_day = c.post("/api/plan", json={"date": next_day, "persist": False}).json()
         assert 7 in [f["id"] for f in other_day["farms"]]  # the change is for that day only
 
 

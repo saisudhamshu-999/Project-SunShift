@@ -122,7 +122,7 @@ export async function simulateSeasonInBrowser(req: SeasonRequest, onEvent: (e: S
       ags.set(f.id, ag)
       need[f.id] = ag.volumeM3
       const pr = priorityFor(ag, st.servedYesterday, probFc)
-      jobs.push({ farmId: f.id, powerKw: f.pumpKw, flowM3h: f.flowM3h, requiredSlots: ag.requiredSlots, allowed: allowed.get(f.id)!, weight: pr.weight, minRun: feeder.min_run_slots, maxStarts: feeder.max_starts, carry: st.servedYesterday })
+      jobs.push({ farmId: f.id, powerKw: f.pumpKw, flowM3h: f.flowM3h, requiredSlots: ag.requiredSlots, allowed: allowed.get(f.id)!, weight: pr.weight, minRun: feeder.min_run_slots, maxStarts: feeder.max_starts, minOff: feeder.min_off_slots, carry: st.servedYesterday })
     }
     const on = greedy({ jobs, solarKw: solarFc, feederLimitKw: feeder.feeder_limit_kw, gridCapKw: feeder.grid_backup_kw, slots: feeder.slots })
     const mSs = evaluate({ on, farms, solarKw: pv.acKw, feeder, needM3: need })

@@ -9,7 +9,8 @@ Used three ways:
 Algorithm: farms in priority order. Pass A gives every farm one block of up to half
 its requirement (fair share first); pass B extends blocks and, if starts allow, adds a
 second block. Windows are chosen to maximise solar margin, never breaking the feeder
-limit, the solar + grid-backup supply limit, availability or minimum run time.
+limit, the solar + grid-backup supply limit, availability, minimum run time or the
+minimum off time between blocks.
 """
 
 from __future__ import annotations
@@ -25,6 +26,17 @@ def _feasible_runs(ok: list[bool]) -> list[int]:
     for t in range(len(ok) - 1, -1, -1):
         runs[t] = runs[t + 1] + 1 if ok[t] else 0
     return runs[:-1]
+
+
+def gap_ok(mine: set[int], t: int, min_off: int) -> bool:
+    """Adding slot ``t`` leaves no off gap shorter than ``min_off`` next to it."""
+    for d in range(2, min_off + 1):
+        # the nearest scheduled slot on either side, d slots away, would leave d - 1 off slots
+        if t - d in mine and not any(t - e in mine for e in range(1, d)):
+            return False
+        if t + d in mine and not any(t + e in mine for e in range(1, d)):
+            return False
+    return True
 
 
 def greedy(p: Problem) -> dict[int, list[int]]:
@@ -50,7 +62,8 @@ def greedy(p: Problem) -> dict[int, list[int]]:
     def ok_slots(job: Job) -> list[bool]:
         allowed = set(job.allowed)
         mine = assigned[job.farm_id]
-        return [t >= t0 and t in allowed and t not in mine and fits(t, job) for t in range(T)]
+        return [t >= t0 and t in allowed and t not in mine and fits(t, job) and gap_ok(mine, t, job.min_off)
+                for t in range(T)]
 
     def place(job: Job, length: int) -> bool:
         ok = ok_slots(job)
@@ -81,7 +94,7 @@ def greedy(p: Problem) -> dict[int, list[int]]:
             options = []
             for s in mine:
                 for nb in (s - 1, s + 1):
-                    if t0 <= nb < T and nb in allowed and nb not in mine and fits(nb, job):
+                    if t0 <= nb < T and nb in allowed and nb not in mine and fits(nb, job) and gap_ok(mine, nb, job.min_off):
                         options.append((S[nb] - load[nb], nb))
             if not options:
                 break

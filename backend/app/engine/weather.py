@@ -40,6 +40,8 @@ HOURLY = [
 ]
 M15 = ["shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation", "temperature_2m", "wind_speed_10m"]
 FORECAST_TTL_S = 20 * 60
+FORECAST_TIMEOUT = httpx.Timeout(5.0, connect=3.0)  # a slow forecast must not hold up planning
+LIVE_RETRY_AFTER_S = 120  # after a failed fetch, serve the fallback without retrying for this long
 ARCHIVE_TTL_S = 7 * 24 * 3600
 
 # Approximate monthly normals for the Deccan plateau (Telangana), used only when no
@@ -55,6 +57,7 @@ CLIMATOLOGY = {
 }
 
 _mem: dict[str, tuple[float, dict[str, Any]]] = {}
+_live_failed_at: dict[str, float] = {}  # forecast key -> time of the last failed live fetch
 
 
 class WeatherUnavailable(RuntimeError):
@@ -159,7 +162,7 @@ def _clean(values: list[Any]) -> np.ndarray:
     return arr
 
 
-def _get_json(url: str, params: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+def _get_json(url: str, params: dict[str, Any], timeout: float | httpx.Timeout = 10.0) -> dict[str, Any]:
     last: Exception | None = None
     for attempt in range(2):
         try:
@@ -187,10 +190,12 @@ def fetch_forecast(loc: Location, *, simulate_outage: bool = False) -> tuple[dic
     """Return (payload, source, fetched_at_iso). Falls back to the persisted cache."""
     key = f"forecast:{loc.id}:{loc.lat:.3f}:{loc.lon:.3f}"
     now = time.time()
+    recently_failed = now - _live_failed_at.get(key, -1e9) < LIVE_RETRY_AFTER_S
     if not simulate_outage:
         hit = _mem.get(key)
         if hit and now - hit[0] < FORECAST_TTL_S:
             return hit[1], "live", datetime.fromtimestamp(hit[0], timezone.utc).isoformat(timespec="seconds")
+    if not simulate_outage and not recently_failed:
         params = {
             "latitude": loc.lat, "longitude": loc.lon, "timezone": TZ, "wind_speed_unit": "ms",
             "past_days": 1, "forecast_days": 4,
@@ -199,12 +204,14 @@ def fetch_forecast(loc: Location, *, simulate_outage: bool = False) -> tuple[dic
             "daily": "et0_fao_evapotranspiration,precipitation_sum,precipitation_probability_max,sunrise,sunset",
         }
         try:
-            data = _get_json(FORECAST_URL, params)
+            data = _get_json(FORECAST_URL, params, timeout=FORECAST_TIMEOUT)
             _mem[key] = (now, data)
+            _live_failed_at.pop(key, None)
             db.cache_put(key, data)
             return data, "live", _now_iso()
         except WeatherUnavailable as exc:
-            log.warning("Open-Meteo forecast unavailable: %s", exc)
+            _live_failed_at[key] = time.time()
+            log.warning("Open-Meteo forecast unavailable (retrying in %d s): %s", LIVE_RETRY_AFTER_S, exc)
     hit = _mem.get(key)
     if hit:
         return hit[1], "cached", datetime.fromtimestamp(hit[0], timezone.utc).isoformat(timespec="seconds")

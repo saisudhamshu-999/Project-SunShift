@@ -23,7 +23,7 @@ def _random_problem(seed: int, scarce: bool = False) -> Problem:
         jobs.append(Job(
             farm_id=i, power_kw=rng.choice([2.9, 4.8, 4.8, 7.2]), flow_m3h=rng.uniform(9, 17),
             required_slots=rng.randint(0, 28), allowed=list(range(a, b)), weight=rng.randint(5, 50),
-            min_run=2, max_starts=2, carry=rng.choice([1.0, 1.0, 0.6]),
+            min_run=2, max_starts=2, min_off=2, carry=rng.choice([1.0, 1.0, 0.6]),
         ))
     return Problem(jobs=jobs, solar_kw=_solar(35 if scarce else 75), feeder_limit_kw=60, grid_cap_kw=0 if scarce else 15,
                    slots=48, time_limit_s=1.5)
@@ -45,6 +45,9 @@ def _check(p: Problem, on: dict[int, list[int]]) -> None:
         for b in blocks:
             if b[0] >= p.fixed_until:
                 assert len(b) >= job.min_run, "block shorter than minimum run"
+        for prev, nxt in zip(blocks, blocks[1:]):
+            if nxt[0] >= p.fixed_until:
+                assert nxt[0] - prev[-1] - 1 >= job.min_off, "pump restarted before its minimum off time"
         for s in slots:
             load[s] += job.power_kw
     for t in range(p.fixed_until, p.slots):
@@ -99,3 +102,20 @@ def test_reoptimisation_keeps_the_past():
     for fid, slots in executed.items():
         assert [s for s in second.on[fid] if s < 20] == slots
     _check(p, second.on)
+
+
+def test_real_feeder_pumps_start_at_most_twice_with_rest_between():
+    """On the 20-farm feeder: <= 2 starts a day, runs >= 30 min, >= 30 min off between runs,
+    and on an ordinary January day the schedule is proven within 1% of the best possible."""
+    from app.engine import planner
+
+    plan = planner.plan_day(planner.PlanParams(date="2030-01-15", persist=False, time_limit_s=5.0))
+    solver = plan["sunshift"]["solver"]
+    assert solver["status"] == "OPTIMAL" and solver["gap"] <= 0.01 and solver["wallTimeS"] < 5.0  # stops once proven
+    feeder = plan["feeder"]
+    assert feeder["maxStarts"] == 2 and feeder["minRunSlots"] == 2 and feeder["minOffSlots"] == 2
+    for farm in plan["farms"]:
+        blocks = farm["schedule"]["blocks"]  # [first, last] slot of each run
+        assert len(blocks) <= 2, farm["code"]
+        assert all(b - a + 1 >= 2 for a, b in blocks), farm["code"]
+        assert all(nxt[0] - prev[1] - 1 >= 2 for prev, nxt in zip(blocks, blocks[1:])), farm["code"]

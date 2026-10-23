@@ -2,6 +2,7 @@ import { Canvas, useFrame, useThree, type CanvasProps } from '@react-three/fiber
 import { Component, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { deviceTier, webglAvailable, type Tier } from '@/lib/device'
 import { useInView } from '@/lib/hooks'
+import { claim, type Claim } from './glBudget'
 
 class GlBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
@@ -84,6 +85,8 @@ export interface LazyCanvasProps extends Omit<CanvasProps, 'children' | 'fallbac
  * Mounts a WebGL canvas only near the viewport, renders it only while visible (or while
  * warming up), unmounts it when far away, keeps the fallback visible until the first
  * frames have rendered, and shows the fallback for good when WebGL is missing or fails.
+ * At most glBudget.MAX_LIVE contexts exist at once: an off-screen canvas may be asked to
+ * unmount and comes back when it is scrolled into view; a lost context is rebuilt.
  */
 export function LazyCanvas({ children, fallback, label, className = '', keepAlive = false, margin = '700px 0px', ...canvas }: LazyCanvasProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -94,6 +97,8 @@ export function LazyCanvas({ children, fallback, label, className = '', keepAliv
   const [failed, setFailed] = useState(false)
   const [tier] = useState<Tier>(() => deviceTier())
   const supported = typeof window !== 'undefined' && webglAvailable()
+  const slot = useRef<Claim | null>(null)
+  const losses = useRef(0)
 
   useEffect(() => {
     if (near) {
@@ -108,6 +113,38 @@ export function LazyCanvas({ children, fallback, label, className = '', keepAliv
     return () => window.clearTimeout(id)
   }, [near, keepAlive])
 
+  // Hold a WebGL context slot while mounted; another canvas may evict this one while it is off screen.
+  useEffect(() => {
+    if (!mounted || !supported || failed) return
+    const c = claim(() => {
+      setMounted(false)
+      setReady(false)
+    }, visible)
+    slot.current = c
+    return () => {
+      c.release()
+      slot.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility is reported by the next effect
+  }, [mounted, supported, failed])
+
+  useEffect(() => {
+    slot.current?.setVisible(visible)
+  }, [visible])
+
+  // Evicted, or the context was lost, and now back on screen: build it again.
+  useEffect(() => {
+    if (visible && !mounted && !failed) setMounted(true)
+  }, [visible, mounted, failed])
+
+  const onContextLost = (e: Event) => {
+    e.preventDefault()
+    losses.current += 1
+    setReady(false)
+    if (losses.current > 2) setFailed(true) // the GPU keeps dropping it: keep the static fallback
+    else setMounted(false) // remounts with a fresh context when visible
+  }
+
   const showGl = supported && !failed && mounted
   const veil = !showGl || !ready || !visible
   return (
@@ -120,6 +157,10 @@ export function LazyCanvas({ children, fallback, label, className = '', keepAliv
             gl={{ antialias: tier !== 'low', powerPreference: 'high-performance', alpha: false }}
             style={{ position: 'absolute', inset: 0 }}
             {...canvas}
+            onCreated={(state) => {
+              state.gl.domElement.addEventListener('webglcontextlost', onContextLost, { once: true })
+              canvas.onCreated?.(state)
+            }}
           >
             <FrameDriver active={visible || !ready} />
             <Suspense fallback={null}>

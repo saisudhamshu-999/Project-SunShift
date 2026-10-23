@@ -29,8 +29,12 @@ RUN useradd --create-home --uid 10001 sunshift \
     && chown sunshift backend/data
 USER sunshift
 
-ENV PORT=8000
+# Uvicorn reads client addresses from X-Forwarded-For when the request comes from these
+# proxies. "*" suits Render and other platforms where all traffic arrives through their
+# proxy; narrow it (e.g. to your proxy's subnet) when the app is reachable directly.
+ENV PORT=8000 \
+    FORWARDED_ALLOW_IPS="*"
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/api/health', timeout=4)"
-CMD ["sh", "-c", "exec uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT} --proxy-headers"]

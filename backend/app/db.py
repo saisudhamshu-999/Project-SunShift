@@ -183,6 +183,10 @@ class Message(Base):
     provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # Idempotency: the same schedule for the same farm and day is sent once, however often
+    # the planner or a dispatch is re-run (failed sends may be retried).
+    plan_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class FarmOverride(Base):
@@ -297,6 +301,12 @@ def dispose() -> None:
 
 def status() -> str:
     return _status
+
+
+def engine() -> Engine | None:
+    """The database engine, or None while the database is unavailable."""
+    _factory()
+    return _engine
 
 
 def _factory() -> sessionmaker[Session] | None:

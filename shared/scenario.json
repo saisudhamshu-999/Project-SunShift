@@ -16,7 +16,8 @@
     "day_start_hour": 6,
     "slots": 48,
     "min_run_slots": 2,
-    "max_starts": 2
+    "max_starts": 2,
+    "min_off_slots": 2
   },
   "pump_model": {
     "motor_efficiency": 0.78,

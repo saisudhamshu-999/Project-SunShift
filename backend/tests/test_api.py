@@ -254,7 +254,7 @@ def test_migrations_match_the_models(make_client):
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         engine.dispose()
     assert diffs == [], diffs
-    assert version == "0003"
+    assert version == "0004"
 
 
 def test_database_created_before_migrations_is_upgraded(database):
@@ -320,7 +320,7 @@ def test_populated_database_upgrades_to_the_latest_schema(database):
     assert db.init_db() == database
     engine = create_engine(db.database_url())
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0003"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004"
         row = conn.execute(text("SELECT crop, language, sms_opt_in, phone FROM farms WHERE id = 1")).one()
         assert row[0] == "cotton" and row[1] == "te" and not row[2] and row[3] is None
         assert conn.execute(text("SELECT count(*) FROM pumps")).scalar() == 1

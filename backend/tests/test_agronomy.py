@@ -78,3 +78,21 @@ def test_assess_farm_respects_rain_and_pump_capacity():
     wet = ag.assess_farm(sc=sc, farm=farm, das=farm.das, dr_start=0.3 * taw, et0=5.0, rain_forecast_mm=40,
                          rain_prob=90, available_slot_count=48)
     assert wet.required_slots == 0
+
+
+def test_hot_cells_derate_solar_output():
+    """Same sun, hotter air: Faiman cell temperature and PVWatts derating cut the output."""
+    from app.engine.solar import panel_output
+
+    feeder = load_scenario().feeder
+    poa, wind = 600.0, 1.0  # below the inverter limit, so the derating is not hidden by clipping
+    tc25, dc25, ac25 = (float(v[0]) for v in panel_output([poa], [25.0], [wind], feeder))
+    tc42, dc42, ac42 = (float(v[0]) for v in panel_output([poa], [42.0], [wind], feeder))
+    assert tc42 - tc25 == pytest.approx(17.0)  # cell heating follows the air
+    assert tc42 > 55  # Indian midday: cells far above the 25 C rating
+    # DC falls by |gamma_pdc| per degree of cell temperature: 17 C x 0.37% = 6.3%
+    assert dc42 / dc25 == pytest.approx((1 + feeder.gamma_pdc * (tc42 - 25)) / (1 + feeder.gamma_pdc * (tc25 - 25)), rel=1e-9)
+    assert 0.92 < ac42 / ac25 < 0.95
+    # At full sun on a hot day the cells run near 70 C and the array still stays within the inverter limit.
+    tc, dc, ac = (float(v[0]) for v in panel_output([1000.0], [42.0], [1.0], feeder))
+    assert 70 < tc < 76 and ac <= feeder.inverter_kw + 1e-9 and ac < feeder.pv_kwp * 0.86

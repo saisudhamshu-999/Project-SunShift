@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from contextlib import asynccontextmanager, contextmanager
 import json
 import logging
 import threading
@@ -22,9 +23,9 @@ from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable, Iterator
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from . import db
 
@@ -252,3 +253,84 @@ def _parse(iso: str):
     from datetime import datetime
 
     return datetime.fromisoformat(iso)
+
+
+# --------------------------------------------------------------- locking
+
+_local_locks: dict[str, threading.Lock] = {}
+_local_guard = threading.Lock()
+
+
+@dataclass
+class _Held:
+    lock: threading.Lock | None = None
+    connection: Any = None
+    key: int = 0
+
+
+def _advisory_key(lock_id: str) -> int:
+    return int.from_bytes(hashlib.sha256(lock_id.encode()).digest()[:8], "big", signed=True)
+
+
+def _try_acquire(lock_id: str) -> _Held | None:
+    """PostgreSQL: a session advisory lock, held across every worker process and server.
+    SQLite or no database (one process): a per-name thread lock."""
+    engine = db.engine()
+    if engine is not None and engine.dialect.name == "postgresql":
+        key = _advisory_key(lock_id)
+        conn = engine.connect()
+        try:
+            got = conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar()
+            conn.commit()  # the lock belongs to the session, not the transaction
+        except Exception:
+            conn.close()
+            raise
+        if got:
+            return _Held(connection=conn, key=key)
+        conn.close()
+        return None
+    with _local_guard:
+        lock = _local_locks.setdefault(lock_id, threading.Lock())
+    return _Held(lock=lock) if lock.acquire(blocking=False) else None
+
+
+def _release(held: _Held) -> None:
+    if held.connection is not None:
+        try:
+            held.connection.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": held.key})
+            held.connection.commit()
+        finally:
+            held.connection.close()
+    elif held.lock is not None:
+        held.lock.release()
+
+
+@contextmanager
+def distributed_job_lock(lock_id: str, wait_s: float = 0.0) -> Iterator[bool]:
+    """Run a critical section once across workers: yields True if the lock was taken
+    (waiting up to ``wait_s``), False if someone else holds it."""
+    deadline = time.monotonic() + wait_s
+    held = _try_acquire(lock_id)
+    while held is None and time.monotonic() < deadline:
+        time.sleep(0.1)
+        held = _try_acquire(lock_id)
+    try:
+        yield held is not None
+    finally:
+        if held is not None:
+            _release(held)
+
+
+@asynccontextmanager
+async def distributed_job_lock_async(lock_id: str, wait_s: float = 0.0) -> AsyncIterator[bool]:
+    """``distributed_job_lock`` for async handlers: waits without blocking the event loop."""
+    deadline = time.monotonic() + wait_s
+    held = _try_acquire(lock_id)
+    while held is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+        held = _try_acquire(lock_id)
+    try:
+        yield held is not None
+    finally:
+        if held is not None:
+            _release(held)

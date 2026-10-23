@@ -19,6 +19,7 @@ from app.engine import agronomy as ag
 from app.engine.heuristic import greedy
 from app.engine.optimiser import Job, Problem
 from app.engine.scenario import REPO_ROOT, available_slots, load_scenario
+from app.engine.solar import panel_output
 from app.messaging import LANGS, sms_lines
 
 FIXTURE = REPO_ROOT / "shared" / "fixtures" / "engine-parity.json"
@@ -71,7 +72,7 @@ def _problems() -> list[Problem]:
             jobs.append(Job(
                 farm_id=i, power_kw=rng.choice([2.9, 4.8, 4.8, 7.2]), flow_m3h=round(rng.uniform(9, 17), 3),
                 required_slots=rng.randint(0, 24), allowed=allowed, weight=rng.randint(5, 50),
-                min_run=2, max_starts=2, executed=executed,
+                min_run=2, max_starts=2, min_off=2, executed=executed,
             ))
         peak = 35 if scarce else 75
         solar = [round(max(0.0, peak * math.sin(math.pi * (t + 0.5) / 48)), 4) for t in range(48)]
@@ -108,7 +109,7 @@ def build() -> dict:
         schedules.append({
             "problem": {
                 "jobs": [{"farmId": j.farm_id, "powerKw": j.power_kw, "flowM3h": j.flow_m3h, "requiredSlots": j.required_slots,
-                          "allowed": j.allowed, "weight": j.weight, "minRun": j.min_run, "maxStarts": j.max_starts,
+                          "allowed": j.allowed, "weight": j.weight, "minRun": j.min_run, "maxStarts": j.max_starts, "minOff": j.min_off,
                           "executed": j.executed} for j in p.jobs],
                 "solarKw": p.solar_kw, "feederLimitKw": p.feeder_limit_kw, "gridCapKw": p.grid_cap_kw,
                 "slots": p.slots, "fixedUntil": p.fixed_until,
@@ -119,7 +120,14 @@ def build() -> dict:
     for farm in SMS_CASES:
         for lang in LANGS:
             sms.append({"farm": farm, "lang": lang, "lines": sms_lines(farm, lang)})
-    return {"et0": et0, "assess": assess, "greedy": schedules, "sms": sms}
+    pv = []
+    for poa in (0.0, 150.0, 600.0, 1000.0, 1150.0):
+        for temp in (25.0, 42.0):
+            for wind in (0.5, 3.0):
+                tc, dc, ac = panel_output([poa], [temp], [wind], sc.feeder)
+                pv.append({"input": {"poa": poa, "tAir": temp, "wind": wind},
+                           "output": {"tCell": float(tc[0]), "dcKw": float(dc[0]), "acKw": float(ac[0])}})
+    return {"et0": et0, "assess": assess, "greedy": schedules, "sms": sms, "pv": pv}
 
 
 if __name__ == "__main__":

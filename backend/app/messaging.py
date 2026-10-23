@@ -204,14 +204,29 @@ def gateway_for(settings) -> Gateway:
 # ------------------------------------------------------------------ storage
 
 
+def dedupe_key(farm_id: int, day: str, slots: list[int], deferred: bool) -> str:
+    """What makes two schedule messages the same: farm, day and the exact pump slots."""
+    return hashlib.sha256(f"{farm_id}|{day}|{','.join(map(str, sorted(slots)))}|{int(deferred)}".encode()).hexdigest()
+
+
+def _already_sent(key: str) -> bool:
+    with db.session() as s:
+        if s is None:
+            return False
+        return s.scalars(
+            select(db.Message.id).where(db.Message.dedupe_key == key, db.Message.status.in_(("sent", "simulated"))).limit(1)
+        ).first() is not None
+
+
 def _record(*, direction: str, farm_id: int | None, phone: str, language: str, body: str, result: SendResult | None,
-            provider: str, dispatch_id: str | None = None) -> dict[str, Any]:
+            provider: str, dispatch_id: str | None = None, plan_date: str | None = None,
+            key: str | None = None) -> dict[str, Any]:
     row = {
         "id": uuid.uuid4().hex[:16], "dispatch_id": dispatch_id, "farm_id": farm_id, "direction": direction,
         "phone_masked": registry.mask_phone(phone) or "", "language": language, "body": body[:1000],
         "status": "received" if result is None else result.status, "provider": provider,
         "provider_id": None if result is None else result.provider_id, "error": None if result is None else result.error,
-        "created_at": db.utcnow(),
+        "created_at": db.utcnow(), "plan_date": plan_date, "dedupe_key": key,
     }
     with db.session() as s:
         if s is not None:
@@ -266,12 +281,17 @@ def send_plan(plan: dict[str, Any], gateway: Gateway, *, reason: str = "morning"
 
     ``updates_from``: the previously sent schedule; only farms whose slots changed get an
     "updated" message instead of the full morning SMS.
+
+    Idempotent: a farmer who already received this exact schedule for this day is not
+    messaged again, however often the dispatch or the re-plan runs. Callers serialise
+    concurrent sends for a feeder and day with ``jobs.distributed_job_lock``.
     """
     feeder_id, day = plan["feeder"]["id"], plan["meta"]["date"]
     farms = _recipients(feeder_id)
     dispatch_id = None if dry_run else _save_dispatch(feeder_id, day, plan, reason)
     out: dict[str, Any] = {"dispatchId": dispatch_id, "date": day, "provider": gateway.name, "dryRun": dry_run, "messages": [],
-                           "counts": {"sent": 0, "simulated": 0, "failed": 0, "noPhone": 0, "optedOut": 0, "unchanged": 0}}
+                           "counts": {"sent": 0, "simulated": 0, "failed": 0, "noPhone": 0, "optedOut": 0, "unchanged": 0,
+                                      "duplicate": 0}}
     for f in plan["farms"]:
         if only is not None and f["id"] not in only:
             continue
@@ -286,6 +306,12 @@ def send_plan(plan: dict[str, Any], gateway: Gateway, *, reason: str = "morning"
             out["counts"]["optedOut"] += 1
             continue
         lang = row.language if row.language in LANGS else "te"
+        key = dedupe_key(f["id"], day, f["schedule"]["slots"], f["deferred"])
+        if not dry_run and _already_sent(key):
+            out["counts"]["duplicate"] += 1
+            out["messages"].append({"farmId": f["id"], "code": f["code"], "language": lang, "status": "duplicate",
+                                    "error": None, "body": None})
+            continue
         if updates_from is None:
             body = "\n".join(sms_lines(f, lang))
         else:
@@ -294,7 +320,7 @@ def send_plan(plan: dict[str, Any], gateway: Gateway, *, reason: str = "morning"
         result = SendResult("simulated") if dry_run else gateway.send(row.phone, body)
         if not dry_run:
             _record(direction="out", farm_id=f["id"], phone=row.phone, language=lang, body=body, result=result,
-                    provider=gateway.name, dispatch_id=dispatch_id)
+                    provider=gateway.name, dispatch_id=dispatch_id, plan_date=day, key=key)
         out["counts"][result.status] = out["counts"].get(result.status, 0) + 1
         out["messages"].append({"farmId": f["id"], "code": f["code"], "language": lang, "status": result.status,
                                 "error": result.error, "body": body})

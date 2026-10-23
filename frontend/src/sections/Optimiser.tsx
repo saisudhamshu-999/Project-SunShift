@@ -85,7 +85,7 @@ export function Optimiser() {
         ['Solar forecast', `${fmt(plan.solar.energyKwh)} kWh`, `peak ${fmt(plan.solar.peakKw, 1)} kW AC`],
         ['Feeder limit', `${fmt(plan.feeder.limitKw)} kW`, `+ ${fmt(plan.feeder.gridBackupKw)} kW grid backup allowed`],
         ['Crop demand', `${fmt(plan.totals.demandM3)} m³`, 'FAO-56 requirement, after rain'],
-        ['Pump constraints', '≥30 min', `per run · ≤${plan.feeder.maxStarts} starts/day · no over-irrigation`],
+        ['Pump constraints', '≥30 min', `per run · ≤${plan.feeder.maxStarts} starts/day${plan.feeder.minOffSlots ? ` · ≥${plan.feeder.minOffSlots * plan.meta.slotMinutes} min off between runs` : ''} · no over-irrigation`],
         ['Farmer availability', `${restricted}`, 'farmers with restricted windows'],
         ['Fairness', '2-day', 'max-min floor, shortfalls repaid'],
       ]

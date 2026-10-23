@@ -78,6 +78,7 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 | `SOLVER_WORKERS` | `2` | Solves run at once, per process |
 | `MAX_QUEUED_JOBS` | `16` | Solves allowed to wait; beyond that the API answers 429 with `Retry-After` |
 | `MAX_TIME_LIMIT_S` | `5` | Server-side cap on the solver time a request can ask for |
+| `BACKGROUND_TIME_LIMIT_S` | `15` | Solver budget for the server's own plans (dispatch, farmer re-plans), up to 30. The solver stops as soon as the schedule is proven within 1% of the best possible |
 | `MAX_CONCURRENT_SEASONS` | `1` | Season simulations at once, per process |
 | `PLAN_CACHE_S`, `STUDY_CACHE_S` | `120`, `600` | How long an identical plan or study reuses a finished result |
 | `RATE_LIMITS` | `on` | Per-client rate limits; `off` disables them |
@@ -90,12 +91,13 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 | `SUNSHIFT_STATIC` | `frontend/dist` | Built site to serve |
 | `SUNSHIFT_SCENARIO` | `shared/scenario.json` | Feeder scenario file |
 | `PORT` | `8000` | Listening port inside the Docker image |
+| `FORWARDED_ALLOW_IPS` | `*` in the Docker image | Proxies whose `X-Forwarded-For` uvicorn trusts, so rate limits apply per real client rather than per proxy. `*` suits Render; narrow it when the app is reachable directly |
 
 ## Tests
 
 ```bash
-cd backend && python -m pytest       # 115 tests
-cd frontend && npm test              # 24 tests
+cd backend && python -m pytest       # 137 tests
+cd frontend && npm test              # 28 tests
 ```
 
 The API tests run every case twice: on SQLite and on a real PostgreSQL. Locally that PostgreSQL comes
@@ -103,20 +105,31 @@ from the `pgserver` package in `requirements-dev.txt`; CI uses a PostgreSQL serv
 `TEST_DATABASE_URL`.
 
 - The agronomy tests reproduce **FAO-56 Example 18** (Uccle, 6 July: ET₀ = 3.9 mm/day), Examples 2 and 3,
-  and check that the root-zone water balance conserves water.
+  and check that the root-zone water balance conserves water. They also check the panels' heat loss: at
+  42 °C air the cells run 17 °C hotter than at 25 °C and output drops by the module's temperature
+  coefficient.
 - The optimiser tests generate random 16-farm problems, normal and scarce, and check every hard constraint
-  on whatever CP-SAT returns. They also check that the solver never does worse than its warm start, that
-  the fairness floor beats pure throughput under scarcity, and that re-optimisation keeps slots that have
-  already run. The greedy fallback is checked the same way in Python and TypeScript.
+  on whatever CP-SAT returns, including at most two starts and at least 30 minutes off between runs. They
+  also check that the solver never does worse than its warm start, that the fairness floor beats pure
+  throughput under scarcity, and that re-optimisation keeps slots that have already run. The greedy
+  fallback is checked the same way in Python and TypeScript.
 - The planner tests run the whole pipeline offline: a physically plausible PV profile, feeder limits
   respected, the uncoordinated baseline overloading where SunShift does not, and rain deferring irrigation.
 - The API tests cover the job queue and result reuse, the full-queue and rate-limit 429s, the time-limit
   cap, API-key checks, the farm registry (changes reach the planner; invalid farms are rejected), CORS,
   errors that never expose internals, migrations matching the models, upgrading a pre-migration database,
   and planning with the database down.
+- The weather tests check that a forecast request gives up after 5 seconds and that an outage is not
+  retried on every request.
 - A parity fixture (`shared/fixtures/engine-parity.json`) holds the Python engine's answers to fixed
-  inputs. A Python test fails if the engine changes without regenerating it (`python -m tests.parity`),
-  and a TypeScript test fails if the browser engine disagrees with it.
+  inputs: ET₀, the water balance, the greedy schedule, the SMS wording and the PV output (cell
+  temperature, DC and AC power). A Python test fails if the engine changes without regenerating it
+  (`python -m tests.parity`), and a TypeScript test fails if the browser engine disagrees with it.
+- The operations tests check that two workers cannot hold the same job lock, that a repeated dispatch
+  never texts the same schedule twice, that an overlapping dispatch is refused, that a farmer's SKIP hands
+  the freed solar to other farms within the feeder limit, that DELAY moves the window back, that dispatch
+  and re-plans get the longer solver budget while clients stay capped, and that rate limits follow the
+  real client behind a proxy but cannot be dodged by forging `X-Forwarded-For`.
 - The messaging tests cover the SMS wording (identical to the site's preview, in all three languages,
   through the parity fixture), Indian number formatting, the Twilio client against a mock server, phone
   numbers never leaving the database, dispatch, every reply type, a new time re-planning the day and
@@ -136,25 +149,38 @@ weather ─► ET₀ ─► crop water need ─► soil-water balance ─► tod
    └─────────► PV forecast (pvlib) ─► solar power per 15-minute slot ────────────────────┘
 ```
 
-- **Weather**: Open-Meteo forecast (15-minute radiation, hourly met variables). If that fails, the last
-  cached forecast; if there is none, monthly climatology. Season replays use the Open-Meteo ERA5 archive.
-  Every result carries its source, and the UI shows it.
+- **Weather**: Open-Meteo forecast (15-minute radiation, hourly met variables), cached for 20 minutes. A
+  request gives up after 5 seconds; the plan then uses the last cached forecast or, if there is none,
+  monthly climatology, and the live source is not tried again for 2 minutes, so an outage does not slow
+  every plan. Season replays use the Open-Meteo ERA5 archive. Every result carries its source, and the UI
+  shows it.
 - **Crop water**: FAO-56 Penman–Monteith ET₀ (Eq. 6), single crop coefficient Kc by growth stage, root-zone
   depletion (Eq. 85) with TAW, RAW and the stress coefficient Ks, and effective rain with runoff. Cotton,
   maize, groundnut and chilli on five soil types, irrigated by drip, sprinkler or furrow. When the 30-hour
   forecast gives at least a 50% chance of 2 mm or more of rain, the effective rain is counted against each
   farm's need, and farms whose need it covers, or nearly covers, are deferred.
-- **Solar**: pvlib solar position, Erbs decomposition, Hay–Davies transposition, Faiman cell temperature,
-  and PVWatts DC and inverter models for the feeder's 120 kWp / 95 kW plant.
+- **Solar**: pvlib solar position, Erbs decomposition, Hay–Davies transposition, Faiman cell temperature
+  (from irradiance on the panel, air temperature and wind), and PVWatts DC (−0.37%/°C) and inverter
+  models for the feeder's 120 kWp / 95 kW plant. Heat matters in Telangana: at 1,000 W/m² and 1 m/s wind,
+  42 °C air puts the cells at 73 °C instead of 56 °C and costs about 7% of output. The browser engine
+  uses the same equations (checked against pvlib through the parity fixture).
 - **Optimiser**: a time-indexed CP-SAT model with 20 pumps × 48 fifteen-minute slots (06:00–18:00).
-  - Hard constraints: availability windows, a minimum run of 30 minutes, at most two starts per day, no
-    over-irrigation, the 60 kW feeder limit, and solar output plus at most 15 kW of grid backup.
+  - Hard constraints: availability windows, a minimum run of 30 minutes, at most two starts per day, at
+    least 30 minutes off before a pump restarts (submersible motors need it to cool, and back-to-back
+    restarts are what burns them out), no over-irrigation, the 60 kW feeder limit, and solar output plus
+    at most 15 kW of grid backup.
   - Lexicographic objective: first maximise the fairness floor (the smallest share of its need any farm
     receives, averaged with yesterday's share so shortfalls are repaid), then maximise priority-weighted
     service minus grid import, peak load and pump starts. When the ML cautious solar curve is available,
     pumping above it is penalised at half the weight of grid import.
   - A greedy schedule seeds the search, so the solver can only improve on it. During the day, slots that
     have already run are fixed and the rest of the day is re-optimised.
+  - The solver stops once its schedule is proven within 1% of the best possible, and then reports
+    `OPTIMAL`; otherwise it reports `FEASIBLE` with the remaining gap, and the site shows both. On ordinary
+    days the proof takes about 0.3 s. When demand exceeds what the feeder can deliver, packing whole pumps
+    into runs leaves a weak bound: in tests on a 16-thread machine the proof took 7–20 s on such days, and
+    on the worst hot-season days it was still about 2% after 20 s. Interactive plans get 3 s and can show
+    `FEASIBLE` on scarce days; the dispatch and farmer re-plans, which farmers act on, get 15 s.
 - **Baselines**: two comparisons, both through the same pump and feeder physics.
   - *Uncoordinated*: the same water need, but every farmer starts at their habitual time. Load above the
     feeder limit cannot be delivered and is counted as overload.
@@ -251,6 +277,24 @@ Farmers reply to the same number:
 | a time, e.g. `14:00` or `9.30` | No pumping before that time today: the rest of the day is re-planned (what already ran is kept), and every farmer whose window moved gets an update |
 | `0` (or NO, नहीं, కాదు) | No irrigation for that farm today; the day is re-planned without it |
 
+Dispatch is safe to repeat: a farmer who already received the exact schedule for that day is not texted
+again (a retry, a second cron or a double click is counted as `duplicate`), and a dispatch for a feeder and
+day that is already running elsewhere is refused with `409`. Re-plans for the same day run one after
+another, across all server processes (PostgreSQL advisory locks; a process-local lock on SQLite).
+
+For an IVR, a WhatsApp bot or a field officer's app, `POST /api/messaging/webhook` takes structured
+commands with the API key:
+
+```bash
+curl -X POST https://<host>/api/messaging/webhook -H "X-API-Key: $SUNSHIFT_API_KEY" \
+  -H "content-type: application/json" -d '{"farmId": 7, "command": "DELAY", "delaySlots": 8}'
+```
+
+`CONFIRM` returns the farm's window. `SKIP` frees the farm's slots for the day; `DELAY` pushes its window
+back by `delaySlots` 15-minute slots. Both re-plan the rest of the day, hand the freed solar to the farms
+that need it most, text every farmer whose window moved, and return the new window, the farms that moved
+and the slots each gained.
+
 With `SMS_PROVIDER=twilio`, point the Twilio number's incoming-message webhook at
 `https://<host>/api/sms/inbound`; requests without a valid Twilio signature are refused. In the default
 simulated mode the same endpoint needs the API key, which makes it a test harness. `/app` shows the message
@@ -288,8 +332,9 @@ All savings shown are comparisons between strategies on this simulated feeder. N
 | GET  | `/api/health` | Engine, library versions, database and registry status, solver queue, default plan date |
 | GET  | `/api/scenario` | The feeder scenario (farms, crops, soils, locations), from the registry |
 | GET  | `/api/ml` | The ML model card: data, training and test periods, held-out metrics, backtest, limitations |
-| POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms` and `date` optional). Needs `X-API-Key` |
+| POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms` and `date` optional). Never texts the same schedule twice; `409` while another dispatch for that day runs. Needs `X-API-Key` |
 | POST | `/api/sms/inbound` | Farmers' replies (Twilio webhook, signature checked; simulated mode needs `X-API-Key`) |
+| POST | `/api/messaging/webhook` | Structured farmer commands: `CONFIRM`, `SKIP`, or `DELAY` with `delaySlots`. Re-plans the day and returns the new schedule. Needs `X-API-Key` |
 | GET  | `/api/messages` | Recent messages, without phone numbers |
 | POST | `/api/jobs` | Queue a solve: `{"kind": ..., "params": {...}}` with kind `plan`, `sensitivity`, `fairness` or `rain-event`. Returns 202 and a job to poll, or 200 with the result when an identical request was just solved |
 | GET  | `/api/jobs/{id}` | A job's status (`queued`, `running`, `done`, `failed`) and, when done, its result |
@@ -327,7 +372,7 @@ shared/scenario.json      the feeder, farms, crops, soils and policy, read by bo
 backend/app/engine/       weather, agronomy (FAO-56), solar (pvlib), optimiser (CP-SAT), heuristic,
                           baselines, metrics, explanations, planner, season simulation
 backend/app/api.py        FastAPI routes and request models
-backend/app/jobs.py       the bounded solver queue: shared solves, result reuse, polling
+backend/app/jobs.py       the bounded solver queue (shared solves, result reuse, polling) and job locks
 backend/app/registry.py   feeders, farms and pumps in the database; builds the scenario the planner uses
 backend/app/ratelimit.py  per-client rate limits (security.py: the API key for registry writes)
 backend/app/db.py         SQLAlchemy models and persistence (PostgreSQL or SQLite)
@@ -351,8 +396,9 @@ frontend/src/engine/      the in-browser fallback engine (TypeScript port) and i
 - One API key guards all registry writes; there are no user accounts or roles. Planning is open to anyone
   who can reach the server, protected by rate limits and the bounded queue.
 - The solver queue and rate limits are per process. With several processes, polls work across all of them
-  (jobs live in the database), but capacity and limits add up per process; a shared queue (e.g. Redis)
-  would be the next step for a multi-server deployment.
+  (jobs live in the database) and dispatches and re-plans are serialised by PostgreSQL advisory locks, but
+  capacity and limits add up per process; a shared queue (e.g. Redis) would be the next step for a
+  multi-server deployment. On SQLite the locks only cover one process, so run one process there.
 - The 3D world draws the 20 plots of the demo layout; farms added through the API appear in plans,
   schedules and lists but not as plots on the map.
 

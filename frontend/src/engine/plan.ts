@@ -149,7 +149,7 @@ export async function buildContext(req: PlanRequest, signal?: AbortSignal, baseW
     prios.set(farm.id, pr)
     jobs.push({
       farmId: farm.id, powerKw: farm.pumpKw, flowM3h: farm.flowM3h, requiredSlots: ag.requiredSlots, allowed: slots,
-      weight: pr.weight, minRun: feeder.min_run_slots, maxStarts: feeder.max_starts,
+      weight: pr.weight, minRun: feeder.min_run_slots, maxStarts: feeder.max_starts, minOff: feeder.min_off_slots,
       executed: (req.executed?.[farm.id] ?? []).slice().sort((a, b) => a - b), carry: farm.served_yesterday,
     })
   }
@@ -287,7 +287,7 @@ function assemble(ctx: Context, on: Record<number, number[]>, wallTimeS: number)
       id: ctx.feeder.id, name: ctx.feeder.name, limitKw: ctx.feeder.feeder_limit_kw, pvKwp: ctx.feeder.pv_kwp,
       inverterKw: ctx.feeder.inverter_kw, gridBackupKw: ctx.feeder.grid_backup_kw, tiltDeg: ctx.feeder.tilt_deg,
       azimuthDeg: ctx.feeder.azimuth_deg, connectedLoadKw: ctx.farms.reduce((a, f) => a + f.pumpKw, 0),
-      minRunSlots: ctx.feeder.min_run_slots, maxStarts: ctx.feeder.max_starts,
+      minRunSlots: ctx.feeder.min_run_slots, maxStarts: ctx.feeder.max_starts, minOffSlots: ctx.feeder.min_off_slots,
     },
     weather: ctx.dw,
     solar: ctx.pv,

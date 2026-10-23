@@ -97,6 +97,9 @@ class Feeder:
     slots: int
     min_run_slots: int
     max_starts: int
+    # Off slots required before a pump restarts (submersible motors need the water column
+    # to settle and the starter to cool); 1 adds nothing beyond the natural one-slot gap.
+    min_off_slots: int = 1
 
     @property
     def slot_hours(self) -> float:

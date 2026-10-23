@@ -5,6 +5,7 @@ Decision: x[j,t] = 1 if farm j's pump runs in 15-minute slot t.
 Hard constraints
   - pumps run only inside the farmer's availability windows
   - every run block lasts at least ``min_run`` slots; at most ``max_starts`` blocks per day
+  - a pump that stops stays off for at least ``min_off`` slots before it restarts
   - no farm receives more than its agronomic requirement (no over-irrigation)
   - feeder load never exceeds the feeder limit
   - load never exceeds solar AC output plus the permitted grid backup
@@ -58,6 +59,7 @@ class Job:
     max_starts: int
     executed: list[int] = field(default_factory=list)  # slots already run (< fixed_until)
     carry: float = 1.0  # share of yesterday's requirement that was served (fairness over time)
+    min_off: int = 1  # off slots required between two run blocks
 
 
 @dataclass
@@ -76,8 +78,11 @@ class Problem:
     # Cautious (P10) solar curve from the ML forecast correction; None plans on solar_kw alone.
     solar_low_kw: list[float] | None = None
     # Stop once the incumbent is provably within this relative gap of the best bound.
-    # CP-SAT then reports OPTIMAL; the UI always shows the actual gap alongside it.
-    gap_limit: float = 5e-4
+    # CP-SAT then reports OPTIMAL; the UI always shows the actual gap alongside it. On
+    # ordinary days 1% is proven in well under a second; on scarce days (demand above what
+    # the feeder can deliver) packing whole pumps into runs leaves a weak bound, and the
+    # proof takes 7-20 s, which background plans get (settings.background_time_limit_s).
+    gap_limit: float = 0.01
 
 
 @dataclass
@@ -244,6 +249,13 @@ def _build(p: Problem) -> _Built:
                         m.add(st == 0)
                 else:
                     m.add_implication(st, nxt)
+            for k in range(2, job.min_off + 1):  # no restart until the pump has been off long enough
+                back = x[j, t - k] if t - k >= 0 else 0
+                if isinstance(back, int):
+                    if back == 1:
+                        m.add(st == 0)
+                else:
+                    m.add(st + back <= 1)
             starts[j, t] = st
             job_starts.append(st)
         m.add(sum(job_starts) + past_blocks <= job.max_starts)

@@ -11,6 +11,8 @@ export interface Job {
   weight: number
   minRun: number
   maxStarts: number
+  /** Off slots required between two run blocks (default 1: nothing extra). */
+  minOff?: number
   executed?: number[]
   carry?: number
 }
@@ -28,6 +30,21 @@ export interface Problem {
 const UNIT = 0.1
 const units = (kw: number) => Math.round(kw / UNIT)
 const solarUnits = (kw: number) => Math.max(0, Math.floor(kw / UNIT))
+
+/** Adding slot `t` leaves no off gap shorter than `minOff` next to it (mirrors heuristic.py). */
+export function gapOk(mine: Set<number>, t: number, minOff: number): boolean {
+  for (let d = 2; d <= minOff; d++) {
+    let nearLeft = false
+    let nearRight = false
+    for (let e = 1; e < d; e++) {
+      if (mine.has(t - e)) nearLeft = true
+      if (mine.has(t + e)) nearRight = true
+    }
+    if (mine.has(t - d) && !nearLeft) return false
+    if (mine.has(t + d) && !nearRight) return false
+  }
+  return true
+}
 
 export function greedy(p: Problem): Record<number, number[]> {
   const T = p.slots
@@ -53,7 +70,7 @@ export function greedy(p: Problem): Record<number, number[]> {
   const place = (job: Job, length: number): boolean => {
     const allowed = new Set(job.allowed)
     const mine = assigned.get(job.farmId)!
-    const ok = Array.from({ length: T }, (_, t) => t >= t0 && allowed.has(t) && !mine.has(t) && fits(t, job))
+    const ok = Array.from({ length: T }, (_, t) => t >= t0 && allowed.has(t) && !mine.has(t) && fits(t, job) && gapOk(mine, t, job.minOff ?? 1))
     const runs = new Array<number>(T + 1).fill(0)
     for (let t = T - 1; t >= 0; t--) runs[t] = ok[t] ? runs[t + 1] + 1 : 0
     const bestLen = Math.min(length, Math.max(...runs.slice(0, T)))
@@ -87,7 +104,7 @@ export function greedy(p: Problem): Record<number, number[]> {
       let best: [number, number] | null = null
       for (const s of mine) {
         for (const nb of [s - 1, s + 1]) {
-          if (nb >= t0 && nb < T && allowed.has(nb) && !mine.has(nb) && fits(nb, job)) {
+          if (nb >= t0 && nb < T && allowed.has(nb) && !mine.has(nb) && fits(nb, job) && gapOk(mine, nb, job.minOff ?? 1)) {
             const score = S[nb] - load[nb]
             if (!best || score > best[0] || (score === best[0] && nb > best[1])) best = [score, nb]
           }

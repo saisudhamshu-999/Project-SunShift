@@ -1,7 +1,10 @@
 """Per-client token-bucket rate limits for the API.
 
 Plain ASGI middleware, so streamed responses (the season simulation) pass through
-untouched. Limits are per process; behind several workers the effective limit is
+untouched. Clients are keyed by ``scope["client"]``: behind a reverse proxy (Render,
+Nginx) uvicorn's proxy-headers support fills that from ``X-Forwarded-For`` for proxies
+listed in ``FORWARDED_ALLOW_IPS`` (the Docker image trusts all; narrow it when the app is
+reachable without the proxy, or clients could spoof their address). Limits are per process; behind several workers the effective limit is
 proportionally higher, which is acceptable for abuse protection.
 """
 
@@ -14,7 +17,7 @@ import time
 from dataclasses import dataclass
 
 COMPUTE_PATHS = ("/api/jobs", "/api/plan", "/api/sensitivity", "/api/fairness", "/api/rain-event")
-ADMIN_PREFIXES = ("/api/feeders", "/api/farms", "/api/dispatch", "/api/sms")
+ADMIN_PREFIXES = ("/api/feeders", "/api/farms", "/api/dispatch", "/api/sms", "/api/messaging")
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 
 

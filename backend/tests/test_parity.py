@@ -12,7 +12,7 @@ def test_parity_fixture_is_current():
     stored = json.loads(FIXTURE.read_text(encoding="utf-8"))
     fresh = json.loads(json.dumps(build()))
     assert stored["greedy"] == fresh["greedy"], "greedy changed: run python -m tests.parity"
-    for kind in ("et0", "assess"):
+    for kind in ("et0", "assess", "pv"):
         assert len(stored[kind]) == len(fresh[kind])
         for a, b in zip(stored[kind], fresh[kind]):
             assert a["input"] == b["input"]

@@ -26,9 +26,9 @@ from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from . import db, messaging, registry
 from .engine import planner, season
-from .engine.scenario import load_scenario
+from .engine.scenario import load_scenario, window_label
 from .engine.weather import apply_mode
-from .jobs import JobManager, Kind, QueueFull
+from .jobs import JobManager, Kind, QueueFull, distributed_job_lock_async
 from .ml import models as ml_models
 from .security import require_api_key
 from .settings import Settings
@@ -72,7 +72,7 @@ class PlanRequest(_Model):
     fixed_until: int = Field(default=0, ge=0, le=48)
     executed: dict[int, list[int]] = Field(default_factory=dict)
     failure: Failure | None = None
-    time_limit_s: float = Field(default=3.0, ge=0.2, le=10)
+    time_limit_s: float = Field(default=3.0, ge=0.2, le=30)  # clients are held to MAX_TIME_LIMIT_S
     persist: bool = True
     # Skip result reuse (an explicit "re-optimise"); identical in-flight requests still share a solve.
     fresh: bool = False
@@ -247,7 +247,8 @@ class LeaseGate:
 
 
 def make_job_manager(settings: Settings) -> JobManager:
-    cap = settings.max_time_limit_s
+    # Requests are capped when they are queued (_submit); this only bounds the server's own plans.
+    cap = max(settings.max_time_limit_s, settings.background_time_limit_s)
 
     def runner(kind: str):
         model = REQUEST_MODELS[kind]
@@ -281,14 +282,18 @@ def _jobs(request: Request) -> JobManager:
     return request.app.state.jobs
 
 
-def _submit(request: Request, kind: str, req: PlanRequest) -> dict[str, Any]:
+def _submit(request: Request, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
+    """Queue a solve. Clients get at most MAX_TIME_LIMIT_S of solver time; the server's
+    own plans (dispatch, re-plans) pass a larger ``time_cap``."""
+    cap = request.app.state.settings.max_time_limit_s if time_cap is None else time_cap
+    update: dict[str, Any] = {"time_limit_s": min(req.time_limit_s, cap)}
     if kind != "plan":
-        req = req.model_copy(update={"persist": False})
+        update["persist"] = False
+    req = req.model_copy(update=update)
     payload = req.model_dump(mode="json")
     # persist and fresh change side effects, not the answer; the plan date and the
     # registry version are part of the answer even when the request leaves them implicit.
     key_payload = {k: v for k, v in payload.items() if k not in ("persist", "fresh")}
-    key_payload["time_limit_s"] = min(req.time_limit_s, request.app.state.settings.max_time_limit_s)
     if req.feeder:
         registry.scenario(req.feeder)  # 404 for an unknown feeder before anything is queued
     context = f"{req.date or planner.default_plan_date()}|{registry.version(req.feeder)}"
@@ -301,8 +306,8 @@ def _submit(request: Request, kind: str, req: PlanRequest) -> dict[str, Any]:
         ) from None
 
 
-async def _solve_and_wait(request: Request, kind: str, req: PlanRequest) -> dict[str, Any]:
-    job = _submit(request, kind, req)
+async def _solve_and_wait(request: Request, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
+    job = _submit(request, kind, req, time_cap=time_cap)
     if job["status"] not in ("done", "failed"):
         job = await _jobs(request).wait(job["id"], timeout_s=90) or job
     if job["status"] == "done":
@@ -517,10 +522,20 @@ class DispatchRequest(_Model):
 
 @router.post("/dispatch", dependencies=[Depends(require_api_key)])
 async def dispatch(body: DispatchRequest, request: Request) -> dict:
-    """Plan the day and send every opted-in farmer their window. Schedule it each morning."""
-    plan = await _solve_and_wait(request, "plan", PlanRequest(date=body.date, feeder=body.feeder, persist=True))
-    return await run_in_threadpool(messaging.send_plan, plan, request.app.state.gateway,
-                                   only=set(body.farms) if body.farms else None, dry_run=body.dry_run)
+    """Plan the day and send every opted-in farmer their window. Schedule it each morning.
+
+    One dispatch per feeder and day runs at a time across all workers, and farmers who
+    already have this exact schedule are not messaged again."""
+    day = body.date or planner.default_plan_date()
+    feeder_id = body.feeder or registry.default_feeder_id()
+    async with distributed_job_lock_async(f"dispatch:{feeder_id}:{day}") as got:
+        if not got:
+            raise HTTPException(status_code=409, detail="A dispatch for this feeder and day is already running")
+        bg = request.app.state.settings.background_time_limit_s
+        plan = await _solve_and_wait(request, "plan", PlanRequest(date=day, feeder=body.feeder, persist=True, time_limit_s=bg),
+                                     time_cap=bg)
+        return await run_in_threadpool(messaging.send_plan, plan, request.app.state.gateway,
+                                       only=set(body.farms) if body.farms else None, dry_run=body.dry_run)
 
 
 @router.get("/messages")
@@ -537,14 +552,28 @@ def _reply_response(gateway: messaging.Gateway, action: str, text: str) -> Respo
     return JSONResponse({"action": action, "reply": text})
 
 
-async def _replan_after_reply(app, day: str, farm_code: str) -> None:
-    """Re-plan the rest of the day from what was sent, then tell farmers whose windows moved."""
-    try:
+def _planning_day() -> str:
+    """The day farmers are replying about: tomorrow's after the evening dispatch, else today's."""
+    days = [planner.default_plan_date(), planner.ist_now().date().isoformat()]
+    return next((d for d in days if messaging.latest_dispatch(d)), days[0])
+
+
+async def replan_day(app, day: str, reason: str) -> dict[str, Any] | None:
+    """Re-plan the rest of ``day`` from what was last sent, then tell every farmer whose
+    window moved. Serialised per feeder and day across workers, so two replies arriving
+    together re-plan one after the other instead of racing."""
+    feeder_id = registry.default_feeder_id()
+    async with distributed_job_lock_async(f"replan:{feeder_id}:{day}", wait_s=120) as got:
+        if not got:
+            log.warning("re-plan for %s (%s) skipped: another re-plan held the lock for 2 minutes", day, reason)
+            return None
         sent = messaging.latest_dispatch(day)
+        before = dict(sent.schedule) if sent else {}
         sc = registry.scenario(None, day)
         now = planner._now_slot(day, sc) or 0
-        executed = {int(k): [t for t in v if t < now] for k, v in (sent.schedule if sent else {}).items()}
-        req = PlanRequest(date=day, fixed_until=now, executed=executed, persist=True, fresh=True)
+        executed = {int(k): [t for t in v if t < now] for k, v in before.items()}
+        req = PlanRequest(date=day, fixed_until=now, executed=executed, persist=True, fresh=True,
+                          time_limit_s=app.state.settings.background_time_limit_s)
         jobs: JobManager = app.state.jobs
         payload = req.model_dump(mode="json")
         job = jobs.submit("plan", payload, key_payload={k: v for k, v in payload.items() if k not in ("persist", "fresh")},
@@ -552,12 +581,20 @@ async def _replan_after_reply(app, day: str, farm_code: str) -> None:
         if job["status"] not in ("done", "failed"):
             job = await jobs.wait(job["id"], timeout_s=90) or job
         if job["status"] != "done":
-            log.warning("re-plan after reply from %s did not finish: %s", farm_code, job.get("error"))
-            return
-        await run_in_threadpool(messaging.send_plan, job["result"], app.state.gateway, reason=f"reply from {farm_code}",
-                                updates_from=sent.schedule if sent else None)
+            log.warning("re-plan (%s) did not finish: %s", reason, job.get("error"))
+            return None
+        plan = job["result"]
+        out = await run_in_threadpool(messaging.send_plan, plan, app.state.gateway, reason=reason,
+                                      updates_from=before if sent else None)
+        moved = sorted(f["code"] for f in plan["farms"] if before.get(str(f["id"]), []) != f["schedule"]["slots"])
+        return {"plan": plan, "sent": out, "before": before, "moved": moved}
+
+
+async def _replan_in_background(app, day: str, reason: str) -> None:
+    try:
+        await replan_day(app, day, reason)
     except Exception:
-        log.exception("re-plan after reply from %s failed", farm_code)
+        log.exception("re-plan (%s) failed", reason)
 
 
 @router.post("/sms/inbound")
@@ -582,23 +619,89 @@ async def sms_inbound(request: Request, background: BackgroundTasks) -> Response
                       result=None, provider=gateway.name)
     if farm is None:
         return _reply_response(gateway, "unknown-sender", "This number is not registered with SunShift.")
-    # The day being planned: tomorrow's dispatch after the evening send, otherwise today's.
-    days = [planner.default_plan_date(), planner.ist_now().date().isoformat()]
-    day = next((d for d in days if messaging.latest_dispatch(d)), days[0])
+    day = _planning_day()
     sent = messaging.latest_dispatch(day)
     reply = messaging.parse_reply(text)
     if reply.kind == "confirm":
         slots = (sent.schedule if sent else {}).get(str(farm.id), [])
-        sc = registry.scenario(None, day)
-        from .engine.scenario import window_label
-
-        window = window_label(slots, sc.feeder)
+        window = window_label(slots, registry.scenario(None, day).feeder)
         return _reply_response(gateway, "confirmed", t["confirmed"].format(w=window) if window else t["notNeeded"])
     if reply.kind == "change":
         return _reply_response(gateway, "asked-time", t["changeAsk"])
     if reply.kind in ("time", "skip"):
         registry.set_override(farm.id, day, skip=reply.kind == "skip", earliest_hour=reply.hour)
-        background.add_task(_replan_after_reply, request.app, day, f"F{farm.id:02d}")
+        background.add_task(_replan_in_background, request.app, day, f"reply from F{farm.id:02d}")
         return _reply_response(gateway, "replanning" if reply.kind == "time" else "skipped",
                                t["replanning"] if reply.kind == "time" else t["skipped"])
     return _reply_response(gateway, "help", t["help"])
+
+
+class FarmerCommand(_Model):
+    farm_id: int = Field(ge=1)
+    command: Literal["CONFIRM", "SKIP", "DELAY"]
+    delay_slots: int | None = Field(default=None, ge=1, le=40, description="15-minute slots to push the window back")
+    date: str | None = Field(default=None, pattern=DATE)
+
+    @model_validator(mode="after")
+    def _delay_needs_slots(self) -> "FarmerCommand":
+        if self.command == "DELAY" and not self.delay_slots:
+            raise ValueError("DELAY needs delaySlots")
+        return self
+
+
+@router.post("/messaging/webhook", dependencies=[Depends(require_api_key)])
+async def farmer_command(body: FarmerCommand, request: Request) -> dict:
+    """Structured farmer commands, for an IVR, a WhatsApp bot or a field officer's app.
+
+    CONFIRM returns the farmer's window. SKIP frees the farm's slots for the day; DELAY
+    pushes its window back by ``delaySlots``. Either re-plans the rest of the day, hands
+    the freed solar capacity to the farms that need it most, messages every farmer whose
+    window moved, and returns the new schedule."""
+    farm = registry.get_farm(body.farm_id)
+    if not farm["active"]:
+        raise HTTPException(status_code=409, detail=f"Farm {farm['code']} is not active")
+    day = body.date or _planning_day()
+    sc = registry.scenario(None, day)
+    sent = messaging.latest_dispatch(day)
+    if sent is not None:
+        baseline = dict(sent.schedule)
+    else:  # nothing sent yet: the current plan is the baseline
+        bg = request.app.state.settings.background_time_limit_s  # the same plan a dispatch would send
+        plan = await _solve_and_wait(request, "plan", PlanRequest(date=day, persist=False, time_limit_s=bg), time_cap=bg)
+        baseline = {str(f["id"]): f["schedule"]["slots"] for f in plan["farms"]}
+    current = baseline.get(str(body.farm_id), [])
+    messaging._record(direction="in", farm_id=body.farm_id, phone="", language=farm["language"] or "te",
+                      body=body.command + (f" {body.delay_slots}" if body.delay_slots else ""), result=None, provider="api")
+    if body.command == "CONFIRM":
+        return {"action": "confirmed", "farm": farm["code"], "date": day, "window": window_label(current, sc.feeder)}
+    if body.command == "SKIP":
+        registry.set_override(body.farm_id, day, skip=True, source="api")
+    else:
+        if not current:
+            raise HTTPException(status_code=409, detail=f"{farm['code']} has no pumping on {day} to delay")
+        start = min(current) + int(body.delay_slots or 0)
+        if start + sc.feeder.min_run_slots > sc.feeder.slots:
+            raise HTTPException(status_code=409, detail="That delay runs past the end of the solar day")
+        earliest = sc.feeder.day_start_hour + start * sc.feeder.slot_hours
+        registry.set_override(body.farm_id, day, skip=False, earliest_hour=earliest, source="api")
+    out = await replan_day(request.app, day, reason=f"{body.command.lower()} from {farm['code']}")
+    if out is None:
+        raise HTTPException(status_code=503, detail="The re-plan did not finish; the change is saved and applies to the next plan",
+                            headers={"Retry-After": "30"})
+    new_plan = out["plan"]
+    mine = next((f for f in new_plan["farms"] if f["id"] == body.farm_id), None)
+    gained = {
+        f["code"]: len(f["schedule"]["slots"]) - len(baseline.get(str(f["id"]), []))
+        for f in new_plan["farms"]
+        if f["id"] != body.farm_id and len(f["schedule"]["slots"]) > len(baseline.get(str(f["id"]), []))
+    }
+    return {
+        "action": "skipped" if body.command == "SKIP" else "delayed",
+        "farm": farm["code"], "date": day,
+        "previousWindow": window_label(current, sc.feeder),
+        "window": mine["schedule"]["window"] if mine else "",
+        "movedFarms": [c for c in out["moved"] if c != farm["code"]],
+        "slotsGainedByOthers": gained,
+        "messages": out["sent"]["counts"],
+        "solver": new_plan["sunshift"]["solver"]["status"],
+    }

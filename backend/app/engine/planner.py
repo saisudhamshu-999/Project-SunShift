@@ -178,7 +178,7 @@ def build_context(params: PlanParams, weather: DayWeather | None = None) -> DayC
         jobs.append(Job(
             farm_id=farm.id, power_kw=farm.pump_kw, flow_m3h=farm.flow_m3h, required_slots=ag.required_slots,
             allowed=allowed[farm.id], weight=pr["weight"], min_run=sc.feeder.min_run_slots,
-            max_starts=sc.feeder.max_starts, executed=sorted(params.executed.get(farm.id, [])),
+            max_starts=sc.feeder.max_starts, min_off=sc.feeder.min_off_slots, executed=sorted(params.executed.get(farm.id, [])),
             carry=farm.served_yesterday,
         ))
     if params.failure == "capacity":
@@ -377,7 +377,7 @@ def assemble(ctx: DayContext, sol: Solution) -> dict:
             "pvKwp": sc.feeder.pv_kwp, "inverterKw": sc.feeder.inverter_kw, "gridBackupKw": sc.feeder.grid_backup_kw,
             "tiltDeg": sc.feeder.tilt_deg, "azimuthDeg": sc.feeder.azimuth_deg,
             "connectedLoadKw": round(sum(f.pump_kw for f in sc.farms), 1),
-            "minRunSlots": sc.feeder.min_run_slots, "maxStarts": sc.feeder.max_starts,
+            "minRunSlots": sc.feeder.min_run_slots, "maxStarts": sc.feeder.max_starts, "minOffSlots": sc.feeder.min_off_slots,
         },
         "weather": ctx.dw.to_dict(),
         "solar": _solar_payload(ctx, sol),

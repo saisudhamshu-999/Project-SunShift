@@ -165,7 +165,7 @@ def simulate(params: SeasonParams) -> Iterator[dict]:
             need_today[f.id] = ag.volume_m3
             jobs.append(Job(farm_id=f.id, power_kw=f.pump_kw, flow_m3h=f.flow_m3h, required_slots=ag.required_slots,
                             allowed=allowed[f.id], weight=pr["weight"], min_run=feeder.min_run_slots,
-                            max_starts=feeder.max_starts, carry=st.served_yesterday))
+                            max_starts=feeder.max_starts, min_off=feeder.min_off_slots, carry=st.served_yesterday))
         sol = solve(Problem(jobs=jobs, solar_kw=solar_fc, feeder_limit_kw=feeder.feeder_limit_kw,
                             grid_cap_kw=feeder.grid_backup_kw, slots=feeder.slots,
                             fairness_weight=sc.policy.fairness_weight, time_limit_s=params.time_limit_s,

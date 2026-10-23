@@ -37,6 +37,10 @@ class Settings:
     solver_workers: int = 2
     max_queued_jobs: int = 16
     max_time_limit_s: float = 5.0
+    # Solver budget for plans the server makes on its own (dispatch, farmer re-plans). They
+    # are not interactive, and scarce days need 7-20 s to prove a schedule within 1% of the
+    # best possible; the solver stops as soon as it has.
+    background_time_limit_s: float = 15.0
     max_concurrent_seasons: int = 1
     # Result reuse: identical requests within these windows share one solve
     plan_cache_s: int = 120
@@ -68,6 +72,7 @@ class Settings:
             solver_workers=max(1, _int("SOLVER_WORKERS", 2)),
             max_queued_jobs=max(0, _int("MAX_QUEUED_JOBS", 16)),
             max_time_limit_s=max(0.2, _float("MAX_TIME_LIMIT_S", 5.0)),
+            background_time_limit_s=max(0.2, min(30.0, _float("BACKGROUND_TIME_LIMIT_S", 15.0))),
             max_concurrent_seasons=max(1, _int("MAX_CONCURRENT_SEASONS", 1)),
             plan_cache_s=max(0, _int("PLAN_CACHE_S", 120)),
             study_cache_s=max(0, _int("STUDY_CACHE_S", 600)),
