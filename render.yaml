@@ -10,6 +10,13 @@ services:
         fromDatabase:
           name: sunshift-db
           property: connectionString
+      # A random key for dispatch, farmer commands and registry writes (shown in the dashboard).
+      - key: SUNSHIFT_API_KEY
+        generateValue: true
+      # Text farmers the day's plan at 05:30 India time. A service that sleeps when idle
+      # needs the daily-dispatch GitHub workflow instead (see backend/app/scheduler.py).
+      - key: DISPATCH_TIMES
+        value: "05:30"
 
 databases:
   - name: sunshift-db

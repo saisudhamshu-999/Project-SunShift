@@ -8,11 +8,13 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from datetime import datetime
+from datetime import time as dtime
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, messaging
+from app import db, messaging, scheduler
 from app.engine import planner
 from app.engine.scenario import load_scenario, window_label
 from app.engine.weather import climatology_day
@@ -82,6 +84,48 @@ def test_dispatch_never_sends_the_same_schedule_twice(make_client, offline_weath
         again = c.post("/api/dispatch", json={"date": DAY}, headers=KEY).json()  # a retry, a second cron, a double click
         assert again["counts"]["duplicate"] == 2 and again["counts"]["simulated"] == 0
         assert len([m for m in c.get("/api/messages").json() if m["direction"] == "out"]) == 2
+
+
+def _clock(monkeypatch, *hms):
+    monkeypatch.setattr(planner, "ist_now", lambda: datetime(2030, 1, 15, *hms, tzinfo=planner.IST))
+
+
+def test_dispatch_times_are_parsed_and_scheduled():
+    times = scheduler.parse_times(["18:00", " 05:30", "05:30"])
+    assert times == [dtime(5, 30), dtime(18, 0)]
+    at = lambda *hm: datetime(2030, 1, 15, *hm, tzinfo=planner.IST)  # noqa: E731
+    assert scheduler.next_run(at(5, 0), times) == at(5, 30)
+    assert scheduler.next_run(at(5, 30), times) == at(18, 0)  # strictly after: never twice for one moment
+    assert scheduler.next_run(at(19, 0), times) == datetime(2030, 1, 16, 5, 30, tzinfo=planner.IST)
+    with pytest.raises(ValueError):
+        scheduler.parse_times(["5.30am"])
+
+
+def test_the_scheduled_dispatch_sends_once_a_day(make_client, offline_weather, monkeypatch):
+    _clock(monkeypatch, 5, 30)  # the morning run: today's plan
+    with make_client(api_key="k") as c:
+        for fid in (7, 8):
+            c.patch(f"/api/farms/{fid}", json={"phone": f"+9100000000{fid:02d}", "smsOptIn": True, "language": "en"}, headers=KEY)
+        first = c.portal.call(scheduler.run_once, c.app)
+        assert first["status"] == "dispatched" and first["date"] == DAY and first["counts"]["simulated"] == 2
+        # Every worker runs the schedule, and an external trigger may fire too: nothing more is sent.
+        assert c.portal.call(scheduler.run_once, c.app)["status"] == "already-dispatched"
+        again = c.post("/api/dispatch", json={"onlyIfNew": True}, headers=KEY)
+        assert again.status_code == 200 and again.json()["status"] == "already-dispatched"
+        assert len([m for m in c.get("/api/messages").json() if m["direction"] == "out"]) == 2
+
+
+def test_the_server_dispatches_at_the_configured_time(make_client, offline_weather, monkeypatch):
+    _clock(monkeypatch, 5, 29, 59)  # one second before DISPATCH_TIMES
+    with make_client(api_key="k", dispatch_times=["05:30"]) as c:
+        deadline = time.monotonic() + 30
+        while messaging.latest_dispatch(DAY) is None:
+            assert time.monotonic() < deadline, "the scheduled dispatch did not run"
+            time.sleep(0.2)
+        assert c.get("/api/health").status_code == 200
+    with pytest.raises(ValueError):
+        with make_client(dispatch_times=["half past five"]):
+            pass  # a bad DISPATCH_TIMES stops the server at startup instead of silently never sending
 
 
 def test_overlapping_dispatches_are_refused(make_client, offline_weather):

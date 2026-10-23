@@ -1,0 +1,39 @@
+name: Daily dispatch
+
+# Asks the deployed server to text farmers the day's plan each morning. Needed where the
+# server sleeps when idle (Render's free tier) and cannot run its own DISPATCH_TIMES
+# schedule; harmless alongside it, because the request only dispatches a day once.
+# Does nothing until the SUNSHIFT_URL and SUNSHIFT_API_KEY repository secrets are set.
+
+on:
+  schedule:
+    - cron: "5 0 * * *" # 00:05 UTC = 05:35 India time. GitHub can start scheduled runs some minutes late.
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch today's plan
+        env:
+          SUNSHIFT_URL: ${{ secrets.SUNSHIFT_URL }}
+          SUNSHIFT_API_KEY: ${{ secrets.SUNSHIFT_API_KEY }}
+        run: |
+          if [ -z "$SUNSHIFT_URL" ] || [ -z "$SUNSHIFT_API_KEY" ]; then
+            echo "The SUNSHIFT_URL and SUNSHIFT_API_KEY secrets are not set: nothing to do."
+            exit 0
+          fi
+          url="${SUNSHIFT_URL%/}"
+          # A sleeping server needs a minute or so to start.
+          for i in $(seq 1 20); do
+            curl -fsS --max-time 20 "$url/api/health" > /dev/null && break
+            sleep 15
+          done
+          code=$(curl -sS -o response.json -w '%{http_code}' --max-time 300 -X POST "$url/api/dispatch" \
+            -H "X-API-Key: $SUNSHIFT_API_KEY" -H "content-type: application/json" -d '{"onlyIfNew": true}')
+          cat response.json; echo
+          # 409: another trigger is dispatching this day right now, which is fine.
+          [ "$code" = 200 ] || [ "$code" = 409 ]

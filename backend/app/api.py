@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 import ortools
 import pvlib
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
@@ -278,14 +278,19 @@ def make_job_manager(settings: Settings) -> JobManager:
     )
 
 
-def _jobs(request: Request) -> JobManager:
-    return request.app.state.jobs
+def _app(request: Request | FastAPI) -> FastAPI:
+    """Solve helpers take the request, or the app itself for the server's own work."""
+    return request if isinstance(request, FastAPI) else request.app
 
 
-def _submit(request: Request, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
+def _jobs(request: Request | FastAPI) -> JobManager:
+    return _app(request).state.jobs
+
+
+def _submit(request: Request | FastAPI, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
     """Queue a solve. Clients get at most MAX_TIME_LIMIT_S of solver time; the server's
     own plans (dispatch, re-plans) pass a larger ``time_cap``."""
-    cap = request.app.state.settings.max_time_limit_s if time_cap is None else time_cap
+    cap = _app(request).state.settings.max_time_limit_s if time_cap is None else time_cap
     update: dict[str, Any] = {"time_limit_s": min(req.time_limit_s, cap)}
     if kind != "plan":
         update["persist"] = False
@@ -306,7 +311,7 @@ def _submit(request: Request, kind: str, req: PlanRequest, *, time_cap: float | 
         ) from None
 
 
-async def _solve_and_wait(request: Request, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
+async def _solve_and_wait(request: Request | FastAPI, kind: str, req: PlanRequest, *, time_cap: float | None = None) -> dict[str, Any]:
     job = _submit(request, kind, req, time_cap=time_cap)
     if job["status"] not in ("done", "failed"):
         job = await _jobs(request).wait(job["id"], timeout_s=90) or job
@@ -518,24 +523,41 @@ class DispatchRequest(_Model):
     feeder: str | None = Field(default=None, max_length=32)
     farms: list[int] | None = None  # only these farms (default: everyone opted in)
     dry_run: bool = False
+    # For schedulers: do nothing if this day was already dispatched (a second trigger, or
+    # a scheduler on every worker). A plain re-dispatch re-plans and may move windows.
+    only_if_new: bool = False
+
+
+async def dispatch_day(app: FastAPI, day: str, *, feeder: str | None = None, farms: list[int] | None = None,
+                       dry_run: bool = False, only_if_new: bool = False) -> dict[str, Any]:
+    """Plan ``day`` and text every opted-in farmer their window.
+
+    One dispatch per feeder and day runs at a time across all workers (``busy`` when
+    another holds the lock), and farmers who already have this exact schedule are not
+    messaged again. With ``only_if_new``, a day that was already dispatched is left alone."""
+    feeder_id = feeder or registry.default_feeder_id()
+    async with distributed_job_lock_async(f"dispatch:{feeder_id}:{day}") as got:
+        if not got:
+            return {"status": "busy", "date": day}
+        if only_if_new and messaging.latest_dispatch(day) is not None:
+            return {"status": "already-dispatched", "date": day}
+        bg = app.state.settings.background_time_limit_s
+        plan = await _solve_and_wait(app, "plan", PlanRequest(date=day, feeder=feeder, persist=True, time_limit_s=bg),
+                                     time_cap=bg)
+        out = await run_in_threadpool(messaging.send_plan, plan, app.state.gateway,
+                                      only=set(farms) if farms else None, dry_run=dry_run)
+        return {"status": "dispatched", **out}
 
 
 @router.post("/dispatch", dependencies=[Depends(require_api_key)])
 async def dispatch(body: DispatchRequest, request: Request) -> dict:
-    """Plan the day and send every opted-in farmer their window. Schedule it each morning.
-
-    One dispatch per feeder and day runs at a time across all workers, and farmers who
-    already have this exact schedule are not messaged again."""
-    day = body.date or planner.default_plan_date()
-    feeder_id = body.feeder or registry.default_feeder_id()
-    async with distributed_job_lock_async(f"dispatch:{feeder_id}:{day}") as got:
-        if not got:
-            raise HTTPException(status_code=409, detail="A dispatch for this feeder and day is already running")
-        bg = request.app.state.settings.background_time_limit_s
-        plan = await _solve_and_wait(request, "plan", PlanRequest(date=day, feeder=body.feeder, persist=True, time_limit_s=bg),
-                                     time_cap=bg)
-        return await run_in_threadpool(messaging.send_plan, plan, request.app.state.gateway,
-                                       only=set(body.farms) if body.farms else None, dry_run=body.dry_run)
+    """Plan the day and send every opted-in farmer their window. Run it each morning:
+    with DISPATCH_TIMES the server does so itself; otherwise call it from a scheduler."""
+    out = await dispatch_day(request.app, body.date or planner.default_plan_date(), feeder=body.feeder,
+                             farms=body.farms, dry_run=body.dry_run, only_if_new=body.only_if_new)
+    if out["status"] == "busy":
+        raise HTTPException(status_code=409, detail="A dispatch for this feeder and day is already running")
+    return out
 
 
 @router.get("/messages")
@@ -550,6 +572,17 @@ def _reply_response(gateway: messaging.Gateway, action: str, text: str) -> Respo
         return Response(f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escape(text)}</Message></Response>',
                         media_type="application/xml")
     return JSONResponse({"action": action, "reply": text})
+
+
+def _window_over(slots: list[int], day: str) -> bool:
+    """True when nothing is left to change for this farm today: its window has finished
+    (or, with no window, the solar day has). Other days are never over."""
+    now = planner.ist_now()
+    if day != now.date().isoformat():
+        return False
+    feeder = registry.scenario(None, day).feeder
+    elapsed = (now.hour * 60 + now.minute - feeder.day_start_hour * 60) / feeder.slot_minutes  # slots since 06:00
+    return (max(slots) + 1 if slots else feeder.slots) <= elapsed
 
 
 def _planning_day() -> str:
@@ -626,6 +659,8 @@ async def sms_inbound(request: Request, background: BackgroundTasks) -> Response
         slots = (sent.schedule if sent else {}).get(str(farm.id), [])
         window = window_label(slots, registry.scenario(None, day).feeder)
         return _reply_response(gateway, "confirmed", t["confirmed"].format(w=window) if window else t["notNeeded"])
+    if reply.kind in ("change", "time", "skip") and _window_over((sent.schedule if sent else {}).get(str(farm.id), []), day):
+        return _reply_response(gateway, "window-passed", t["windowPassed"])  # nothing left to move today
     if reply.kind == "change":
         return _reply_response(gateway, "asked-time", t["changeAsk"])
     if reply.kind in ("time", "skip"):
@@ -674,6 +709,8 @@ async def farmer_command(body: FarmerCommand, request: Request) -> dict:
                       body=body.command + (f" {body.delay_slots}" if body.delay_slots else ""), result=None, provider="api")
     if body.command == "CONFIRM":
         return {"action": "confirmed", "farm": farm["code"], "date": day, "window": window_label(current, sc.feeder)}
+    if _window_over(current, day):
+        raise HTTPException(status_code=409, detail=f"{farm['code']}'s pumping time on {day} is already over")
     if body.command == "SKIP":
         registry.set_override(body.farm_id, day, skip=True, source="api")
     else:

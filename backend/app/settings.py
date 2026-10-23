@@ -54,6 +54,9 @@ class Settings:
     # Security
     api_key: str | None = None
     allowed_origins: list[str] = field(default_factory=list)
+    # India-time moments the server dispatches the day's plan to farmers itself ("05:30");
+    # empty means off, and something outside calls /api/dispatch (see scheduler.py).
+    dispatch_times: list[str] = field(default_factory=list)
     # Farmer SMS: 'simulated' (record only) or 'twilio'
     sms_provider: str = "simulated"
     twilio_sid: str | None = None
@@ -82,6 +85,7 @@ class Settings:
             rate_admin=_rate("RATE_LIMIT_ADMIN", "60/20"),
             rate_read=_rate("RATE_LIMIT_READ", "1200/200"),
             api_key=os.environ.get("SUNSHIFT_API_KEY") or None,
+            dispatch_times=[t.strip() for t in os.environ.get("DISPATCH_TIMES", "").split(",") if t.strip()],
             allowed_origins=origins,
             sms_provider=os.environ.get("SMS_PROVIDER", "simulated").strip().lower(),
             twilio_sid=os.environ.get("TWILIO_ACCOUNT_SID") or None,

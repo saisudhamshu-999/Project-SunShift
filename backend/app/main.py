@@ -3,6 +3,7 @@ so the whole product deploys as a single service."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -14,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import db, messaging, registry
+from . import db, messaging, registry, scheduler
 from .api import LeaseGate, make_job_manager, router
 from .engine.scenario import REPO_ROOT
 from .ratelimit import RateLimiter, RateLimitMiddleware
@@ -33,9 +34,14 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
         db.on_ready(registry.seed_if_empty)
         log.info("database: %s", db.init_db())
         app.state.jobs = make_job_manager(settings)
+        daily = None
+        if settings.dispatch_times:
+            daily = asyncio.create_task(scheduler.run_daily(app, scheduler.parse_times(settings.dispatch_times)))
         try:
             yield
         finally:
+            if daily is not None:
+                daily.cancel()
             app.state.jobs.shutdown()
 
     app = FastAPI(

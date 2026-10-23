@@ -56,7 +56,8 @@ docker compose up --build         # SunShift + PostgreSQL 17 on http://localhost
 ```
 
 The `Dockerfile` builds the site with Node 22 and runs it on Python 3.11. `render.yaml` is a Render
-Blueprint (one Docker web service plus a managed PostgreSQL). The GitHub Actions workflow in
+Blueprint (one Docker web service plus a managed PostgreSQL); it generates a random `SUNSHIFT_API_KEY`,
+shown in the Render dashboard, and sets the 05:30 daily dispatch. The GitHub Actions workflow in
 `.github/workflows/ci.yml` builds and smoke-tests the image on every push; it has not been built on a
 developer machine yet, so check the first CI run before relying on it.
 
@@ -78,6 +79,7 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 | `SOLVER_WORKERS` | `2` | Solves run at once, per process |
 | `MAX_QUEUED_JOBS` | `16` | Solves allowed to wait; beyond that the API answers 429 with `Retry-After` |
 | `MAX_TIME_LIMIT_S` | `5` | Server-side cap on the solver time a request can ask for |
+| `DISPATCH_TIMES` | unset (`05:30` in `render.yaml`) | India-time moments the server texts farmers the day's plan, e.g. `05:30` or `05:30,18:00`. Unset means something outside calls `/api/dispatch` (see Farmer messaging) |
 | `BACKGROUND_TIME_LIMIT_S` | `15` | Solver budget for the server's own plans (dispatch, farmer re-plans), up to 30. The solver stops as soon as the schedule is proven within 1% of the best possible |
 | `MAX_CONCURRENT_SEASONS` | `1` | Season simulations at once, per process |
 | `PLAN_CACHE_S`, `STUDY_CACHE_S` | `120`, `600` | How long an identical plan or study reuses a finished result |
@@ -96,7 +98,7 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 ## Tests
 
 ```bash
-cd backend && python -m pytest       # 137 tests
+cd backend && python -m pytest       # 146 tests
 cd frontend && npm test              # 28 tests
 ```
 
@@ -128,13 +130,14 @@ from the `pgserver` package in `requirements-dev.txt`; CI uses a PostgreSQL serv
 - The operations tests check that two workers cannot hold the same job lock, that a repeated dispatch
   never texts the same schedule twice, that an overlapping dispatch is refused, that a farmer's SKIP hands
   the freed solar to other farms within the feeder limit, that DELAY moves the window back, that dispatch
-  and re-plans get the longer solver budget while clients stay capped, and that rate limits follow the
-  real client behind a proxy but cannot be dodged by forging `X-Forwarded-For`.
+  and re-plans get the longer solver budget while clients stay capped, that the server's daily dispatch
+  runs at its configured time and sends once however often it is triggered, and that rate limits follow
+  the real client behind a proxy but cannot be dodged by forging `X-Forwarded-For`.
 - The messaging tests cover the SMS wording (identical to the site's preview, in all three languages,
   through the parity fixture), Indian number formatting, the Twilio client against a mock server, phone
   numbers never leaving the database, dispatch, every reply type, a new time re-planning the day and
-  notifying exactly the farmers whose windows moved, a skip lasting only that day, and Twilio webhook
-  signatures.
+  notifying exactly the farmers whose windows moved, a skip lasting only that day, replies after the
+  window has finished, deactivation erasing the farmer's number, and Twilio webhook signatures.
 - The ML tests re-check the shipped models on a stored sample of the held-out year (offline): the likely
   solar curve must beat the raw forecast by at least 10% RMSE, the cautious curve must miss between 5% and
   16% of hours, and the rain model must beat the forecast's yes/no and the base rate. They also check
@@ -261,12 +264,25 @@ What these models do not do, stated plainly:
 
 Each farm in the registry can have a phone number, a language (Telugu, Hindi or English) and an SMS
 opt-in. Phone numbers are stored in the database only: the API returns them masked (`+91••••••3210`) and
-the message log never includes them.
+the message log never includes them. Deactivating a farm (`DELETE /api/farms/{id}`) erases the number
+and the SMS consent, as India's DPDP Act requires on request, and blanks the masked number in the message
+log; the farm's plans and history stay.
+
+**The morning message.** Each day the server plans the day and texts every opted-in farmer their window:
+
+- With `DISPATCH_TIMES=05:30` (India time; `render.yaml` sets it), the server does it itself.
+- A server that sleeps when idle, such as Render's free tier, cannot wake itself. There the
+  `.github/workflows/daily-dispatch.yml` workflow calls it at 05:35 each day: add the repository secrets
+  `SUNSHIFT_URL` (e.g. `https://sunshift.onrender.com`) and `SUNSHIFT_API_KEY`. Until they are set, the
+  workflow does nothing.
+- Or by hand, or from any other scheduler:
 
 ```bash
-# each morning (cron, a scheduler, or by hand): plan the day and text every opted-in farmer
-curl -X POST https://<host>/api/dispatch -H "X-API-Key: $SUNSHIFT_API_KEY" -H "content-type: application/json" -d '{}'
+curl -X POST https://<host>/api/dispatch -H "X-API-Key: $SUNSHIFT_API_KEY" -H "content-type: application/json" -d '{"onlyIfNew": true}'
 ```
+
+All three can run together: with `onlyIfNew` (which the server's own schedule always uses) a day that was
+already dispatched is left alone, so farmers get one morning message.
 
 Farmers reply to the same number:
 
@@ -276,6 +292,10 @@ Farmers reply to the same number:
 | `2` (or CHANGE) | Asks them for a time that suits them |
 | a time, e.g. `14:00` or `9.30` | No pumping before that time today: the rest of the day is re-planned (what already ran is kept), and every farmer whose window moved gets an update |
 | `0` (or NO, नहीं, కాదు) | No irrigation for that farm today; the day is re-planned without it |
+
+A `2`, a time or a `0` that arrives after the farm's window has finished (or, for a farm with no window,
+after the solar day) changes nothing; the farmer is told that today's pumping time is over and that
+tomorrow's schedule comes in the next message.
 
 Dispatch is safe to repeat: a farmer who already received the exact schedule for that day is not texted
 again (a retry, a second cron or a double click is counted as `duplicate`), and a dispatch for a feeder and
@@ -332,7 +352,7 @@ All savings shown are comparisons between strategies on this simulated feeder. N
 | GET  | `/api/health` | Engine, library versions, database and registry status, solver queue, default plan date |
 | GET  | `/api/scenario` | The feeder scenario (farms, crops, soils, locations), from the registry |
 | GET  | `/api/ml` | The ML model card: data, training and test periods, held-out metrics, backtest, limitations |
-| POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms` and `date` optional). Never texts the same schedule twice; `409` while another dispatch for that day runs. Needs `X-API-Key` |
+| POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms`, `date` and `onlyIfNew` optional). Never texts the same schedule twice; `409` while another dispatch for that day runs. Needs `X-API-Key` |
 | POST | `/api/sms/inbound` | Farmers' replies (Twilio webhook, signature checked; simulated mode needs `X-API-Key`) |
 | POST | `/api/messaging/webhook` | Structured farmer commands: `CONFIRM`, `SKIP`, or `DELAY` with `delaySlots`. Re-plans the day and returns the new schedule. Needs `X-API-Key` |
 | GET  | `/api/messages` | Recent messages, without phone numbers |
@@ -350,7 +370,7 @@ All savings shown are comparisons between strategies on this simulated feeder. N
 | PATCH | `/api/feeders/{id}` | Change a feeder's name, location or capacities. Needs `X-API-Key` |
 | POST | `/api/feeders/{id}/farms` | Add a farm (crop, soil, method, area, sowing date or days after sowing, availability, pump). Needs `X-API-Key` |
 | PATCH | `/api/farms/{id}` | Change a farm or its pump, including measured pump power or flow. Needs `X-API-Key` |
-| DELETE | `/api/farms/{id}` | Deactivate a farm (kept for history). Needs `X-API-Key` |
+| DELETE | `/api/farms/{id}` | Deactivate a farm (kept for history) and erase the farmer's phone number and SMS consent. Needs `X-API-Key` |
 
 Every solve runs on a bounded worker pool, never inside the web request. Identical requests share one
 solve, and a recent finished result is reused. When the queue is full, or a client sends too many
@@ -379,6 +399,7 @@ backend/app/db.py         SQLAlchemy models and persistence (PostgreSQL or SQLit
 backend/migrations/       Alembic migrations, applied at startup
 backend/app/ml/           ML weather corrections: features, data fetch, training (train.py), runtime, artifacts/
 backend/app/messaging.py  farmer SMS: wording in three languages, gateways (simulated, Twilio), replies
+backend/app/scheduler.py  the daily dispatch at DISPATCH_TIMES
 docs/DEMO_SCRIPT.md       the demo video script, timed to /demo
 backend/tests/            pytest suite (engine, API on SQLite and PostgreSQL, engine parity)
 frontend/src/sections/    the story site, one file per section

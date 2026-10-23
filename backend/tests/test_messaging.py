@@ -152,6 +152,51 @@ def test_skipping_removes_the_farm_for_the_day(make_client, offline_weather):
         assert 7 in [f["id"] for f in other_day["farms"]]  # the change is for that day only
 
 
+def test_a_reply_after_the_window_is_over_is_told_so(make_client, offline_weather, monkeypatch):
+    with make_client(api_key="k") as c:
+        _register(c, lang="en")
+        day = c.post("/api/dispatch", json={}, headers=KEY).json()["date"]
+        slots = messaging.latest_dispatch(day).schedule["7"]
+        assert slots, "farm 7 should be irrigated on this day"
+
+        def at(slot: int):  # the clock at the start of a slot on the dispatched day
+            minutes = 6 * 60 + 15 * slot
+            monkeypatch.setattr(planner, "ist_now", lambda: datetime(2030, 1, 15, minutes // 60, minutes % 60, tzinfo=planner.IST))
+
+        at(max(slots))  # the last slot is running: the window can still change
+        assert _reply(c, "2").json()["action"] == "asked-time"
+        at(max(slots) + 1)  # the window has finished: nothing left to move
+        for text in ("15:00", "0", "2"):
+            r = _reply(c, text).json()
+            assert r["action"] == "window-passed" and r["reply"] == messaging.T["en"]["windowPassed"], text
+        assert _reply(c, "1").json()["action"] == "confirmed"  # confirming still repeats the window
+        # The late "0" was not stored as a skip: the farm is still in the plan.
+        assert 7 in [f["id"] for f in c.post("/api/plan", json={"date": day, "persist": False}).json()["farms"]]
+        r = c.post("/api/messaging/webhook", json={"farmId": 7, "command": "SKIP", "date": day}, headers=KEY)
+        assert r.status_code == 409 and "already over" in r.json()["detail"]
+        for lang in messaging.LANGS:
+            assert messaging.T[lang]["windowPassed"]
+
+
+def test_deactivating_a_farm_erases_the_farmers_number(make_client, offline_weather):
+    from sqlalchemy import select
+
+    from app import db, registry
+
+    with make_client(api_key="k") as c:
+        _register(c, lang="en")
+        c.post("/api/dispatch", json={}, headers=KEY)
+        _reply(c, "1")
+        farm = c.delete("/api/farms/7", headers=KEY).json()
+        assert farm["active"] is False and farm["phone"] is None and farm["smsOptIn"] is False
+        with db.session() as s:
+            assert s.get(db.FarmRow, 7).phone is None
+            masked = s.scalars(select(db.Message.phone_masked).where(db.Message.farm_id == 7)).all()
+        assert len(masked) == 2 and all(m == "" for m in masked)  # the message log keeps no trace of the number
+        assert registry.farm_by_phone(PHONE) is None  # texts from that number are no longer matched to the farm
+        assert _reply(c, "1").json()["action"] == "unknown-sender"
+
+
 def test_twilio_webhook_requires_a_valid_signature(make_client, offline_weather):
     with make_client(api_key="k", sms_provider="twilio", twilio_sid="AC1", twilio_token="tok", twilio_from="+15005550006",
                      public_base_url="https://sunshift.example") as c:

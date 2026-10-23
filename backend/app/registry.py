@@ -17,7 +17,7 @@ from dataclasses import replace
 from datetime import date as Date
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from . import db
 from .engine.scenario import Farm, Scenario, load_scenario, pump_electrical_kw, pump_flow_m3h
@@ -359,8 +359,15 @@ def update_farm(farm_id: int, fields: dict[str, Any], pump: dict[str, Any]) -> d
 
 
 def deactivate_farm(farm_id: int) -> dict[str, Any]:
-    """Farms are deactivated, not deleted, so past runs stay explainable."""
-    return update_farm(farm_id, {"active": False}, {})
+    """Farms are deactivated, not deleted, so past runs stay explainable. The farmer's
+    personal data goes: the phone number and SMS consent are erased (India's DPDP Act gives
+    a right to erasure), and the masked number is blanked in the message log. Reactivating
+    the farm needs the number registered again."""
+    farm = update_farm(farm_id, {"active": False, "phone": None, "sms_opt_in": False}, {})
+    with db.session() as s:
+        if s is not None:
+            s.execute(update(db.Message).where(db.Message.farm_id == farm_id).values(phone_masked=""))
+    return farm
 
 
 def main() -> None:  # pragma: no cover - CLI

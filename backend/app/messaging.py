@@ -53,6 +53,7 @@ T: dict[str, dict[str, Any]] = {
         "updated": "Schedule updated: pump window {w}.",
         "updatedNone": "Schedule updated: no pumping for you today.",
         "skipped": "Noted: no irrigation for you today.",
+        "windowPassed": "Today's pump time is over, so it can't be changed now. Tomorrow's schedule comes in the next message.",
         "help": "Reply 1 = OK, 2 = change time, 0 = not today.",
     },
     "hi": {
@@ -67,6 +68,7 @@ T: dict[str, dict[str, Any]] = {
         "updated": "समय बदला गया: पंप का समय {w}।",
         "updatedNone": "समय बदला गया: आज आपके लिए पंप नहीं चलेगा।",
         "skipped": "ठीक है, आज आपके खेत में सिंचाई नहीं होगी।",
+        "windowPassed": "आज का पंप समय समाप्त हो चुका है, इसलिए अब बदला नहीं जा सकता। कल का समय अगले संदेश में आएगा।",
         "help": "जवाब दें: 1 = ठीक है, 2 = समय बदलें, 0 = आज नहीं।",
     },
     "te": {
@@ -81,6 +83,7 @@ T: dict[str, dict[str, Any]] = {
         "updated": "సమయం మార్చబడింది: పంపు సమయం {w}.",
         "updatedNone": "సమయం మార్చబడింది: ఈ రోజు మీకు పంపు లేదు.",
         "skipped": "సరే, ఈ రోజు మీ పొలానికి నీరు పెట్టడం లేదు.",
+        "windowPassed": "ఈ రోజు పంపు సమయం ముగిసింది, కాబట్టి ఇప్పుడు మార్చలేము. రేపటి సమయం తదుపరి సందేశంలో వస్తుంది.",
         "help": "జవాబు: 1 = సరే, 2 = సమయం మార్చండి, 0 = ఈ రోజు కాదు.",
     },
 }
