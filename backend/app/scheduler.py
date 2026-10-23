@@ -20,6 +20,7 @@ from datetime import datetime, time, timedelta
 
 from fastapi import FastAPI
 
+from . import alerts
 from .engine import planner
 
 log = logging.getLogger("sunshift.scheduler")
@@ -61,16 +62,27 @@ async def run_once(app: FastAPI) -> dict:
     return out
 
 
+async def run_scheduled(app: FastAPI) -> dict | None:
+    """One scheduled dispatch; a failure is logged and sent to the operator as an alert."""
+    try:
+        return await run_once(app)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.exception("scheduled dispatch failed; the next one runs at the next scheduled time")
+        detail = getattr(exc, "detail", None) or type(exc).__name__
+        alerts.alert("dispatch-failed", "SunShift: the morning message was not sent",
+                     f"The scheduled dispatch for {planner.default_plan_date()} failed ({detail}). Farmers have "
+                     "not been told their pump times. Send it by hand with POST /api/dispatch once the cause "
+                     "is fixed; the server log has the details.", key=planner.default_plan_date())
+        return None
+
+
 async def run_daily(app: FastAPI, times: list[time]) -> None:
     log.info("daily dispatch at %s IST", ", ".join(t.strftime("%H:%M") for t in times))
     while True:
         now = planner.ist_now()
         at = next_run(now, times)
         await asyncio.sleep((at - now).total_seconds())
-        try:
-            await run_once(app)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("scheduled dispatch failed; the next one runs at the next scheduled time")
+        await run_scheduled(app)
         await asyncio.sleep(1)  # never fire twice for the same minute

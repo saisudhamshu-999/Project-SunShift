@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import db, messaging, registry, scheduler
+from . import alerts, db, messaging, registry, scheduler
 from .api import LeaseGate, make_job_manager, router
 from .engine.scenario import REPO_ROOT
 from .ratelimit import RateLimiter, RateLimitMiddleware
@@ -32,7 +32,12 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         db.on_ready(registry.seed_if_empty)
-        log.info("database: %s", db.init_db())
+        status = db.init_db()
+        log.info("database: %s", status)
+        if status == "unavailable":
+            alerts.alert("database-unavailable", "SunShift: database unavailable",
+                         "The server started without its database. Plans still work, but nothing is saved "
+                         "and farmers cannot be messaged. Check DATABASE_URL and the database service.")
         app.state.jobs = make_job_manager(settings)
         daily = None
         if settings.dispatch_times:
@@ -43,6 +48,7 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
             if daily is not None:
                 daily.cancel()
             app.state.jobs.shutdown()
+            alerts.drain(timeout_s=3)
 
     app = FastAPI(
         title="SunShift API",
@@ -52,6 +58,7 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
         lifespan=lifespan,
     )
     app.state.settings = settings
+    alerts.configure(settings.alert_webhook_url, settings.alert_cooldown_s)
     app.state.gateway = messaging.gateway_for(settings)
     app.state.season_gate = LeaseGate(settings.max_concurrent_seasons)
 
@@ -82,6 +89,9 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
         # Never send internals to the client; log them with a reference instead.
         ref = uuid.uuid4().hex[:8]
         log.exception("unhandled error on %s %s (ref %s)", request.method, request.url.path, ref)
+        alerts.alert("server-error", "SunShift: unexpected server error",
+                     f"{request.method} {request.url.path} failed ({type(exc).__name__}, ref {ref}). "
+                     "The details are in the server log under that reference.", key=request.url.path)
         return JSONResponse({"detail": "Internal server error", "ref": ref}, status_code=500)
 
     app.include_router(router, prefix="/api")

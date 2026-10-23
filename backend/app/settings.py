@@ -57,6 +57,9 @@ class Settings:
     # India-time moments the server dispatches the day's plan to farmers itself ("05:30");
     # empty means off, and something outside calls /api/dispatch (see scheduler.py).
     dispatch_times: list[str] = field(default_factory=list)
+    # Where operator alerts go (ntfy topic, Slack or Discord webhook, any JSON webhook); unset = off.
+    alert_webhook_url: str | None = None
+    alert_cooldown_s: float = 1800.0  # the same alert at most this often
     # Farmer SMS: 'simulated' (record only) or 'twilio'
     sms_provider: str = "simulated"
     twilio_sid: str | None = None
@@ -86,6 +89,8 @@ class Settings:
             rate_read=_rate("RATE_LIMIT_READ", "1200/200"),
             api_key=os.environ.get("SUNSHIFT_API_KEY") or None,
             dispatch_times=[t.strip() for t in os.environ.get("DISPATCH_TIMES", "").split(",") if t.strip()],
+            alert_webhook_url=os.environ.get("ALERT_WEBHOOK_URL") or None,
+            alert_cooldown_s=max(0.0, _float("ALERT_COOLDOWN_S", 1800.0)),
             allowed_origins=origins,
             sms_provider=os.environ.get("SMS_PROVIDER", "simulated").strip().lower(),
             twilio_sid=os.environ.get("TWILIO_ACCOUNT_SID") or None,

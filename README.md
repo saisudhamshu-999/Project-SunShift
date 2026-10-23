@@ -80,6 +80,8 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 | `MAX_QUEUED_JOBS` | `16` | Solves allowed to wait; beyond that the API answers 429 with `Retry-After` |
 | `MAX_TIME_LIMIT_S` | `5` | Server-side cap on the solver time a request can ask for |
 | `DISPATCH_TIMES` | unset (`05:30` in `render.yaml`) | India-time moments the server texts farmers the day's plan, e.g. `05:30` or `05:30,18:00`. Unset means something outside calls `/api/dispatch` (see Farmer messaging) |
+| `ALERT_WEBHOOK_URL` | unset | Where operator alerts go: an ntfy topic, a Slack or Discord webhook, or any URL that takes JSON (see Alerts). Unset means alerts are off |
+| `ALERT_COOLDOWN_S` | `1800` | The same alert is sent at most this often |
 | `BACKGROUND_TIME_LIMIT_S` | `15` | Solver budget for the server's own plans (dispatch, farmer re-plans), up to 30. The solver stops as soon as the schedule is proven within 1% of the best possible |
 | `MAX_CONCURRENT_SEASONS` | `1` | Season simulations at once, per process |
 | `PLAN_CACHE_S`, `STUDY_CACHE_S` | `120`, `600` | How long an identical plan or study reuses a finished result |
@@ -98,7 +100,7 @@ cd backend && alembic revision --autogenerate -m "describe the change"
 ## Tests
 
 ```bash
-cd backend && python -m pytest       # 146 tests
+cd backend && python -m pytest       # 157 tests
 cd frontend && npm test              # 28 tests
 ```
 
@@ -138,6 +140,10 @@ from the `pgserver` package in `requirements-dev.txt`; CI uses a PostgreSQL serv
   numbers never leaving the database, dispatch, every reply type, a new time re-planning the day and
   notifying exactly the farmers whose windows moved, a skip lasting only that day, replies after the
   window has finished, deactivation erasing the farmer's number, and Twilio webhook signatures.
+- The alert tests check the ntfy, Slack, Discord and JSON formats, the cooldown, that a failing alert
+  service never breaks a request, and that unsent SMS, a plan without a live forecast, a failed morning
+  dispatch, a failed re-plan, unexpected errors and a missing database each reach the operator, with no
+  phone number in any alert.
 - The ML tests re-check the shipped models on a stored sample of the held-out year (offline): the likely
   solar curve must beat the raw forecast by at least 10% RMSE, the cautious curve must miss between 5% and
   16% of hours, and the rain model must beat the forecast's yes/no and the base rate. They also check
@@ -322,6 +328,35 @@ log. For SMS to Indian numbers, operators require DLT registration of the sender
 template (TRAI rules); that registration is outside this code. The Hindi and Telugu wording should be
 reviewed by native speakers before real use.
 
+## Alerts
+
+Nobody watches server logs at 05:30, so failures that matter are sent to a person. Set
+`ALERT_WEBHOOK_URL` to one of:
+
+- an [ntfy](https://ntfy.sh) topic, e.g. `https://ntfy.sh/sunshift-<something unguessable>`: free push
+  notifications to the ntfy phone app, with no account (anyone who knows the topic can read it, so make
+  it long and random);
+- a Slack or Discord incoming-webhook URL;
+- any other URL, which receives `{"service", "event", "title", "text", "details"}` as JSON.
+
+| Alert | When |
+| --- | --- |
+| `dispatch-failed` | The scheduled morning dispatch failed: farmers have not been told their times |
+| `sms-failed` | Some farmers' messages (morning or update) were not sent; lists their farm codes |
+| `weather-fallback` | A dispatched plan for today or the next days used cached or climatology weather |
+| `replan-failed` | A farmer's change could not be re-planned (the change is kept for the next plan) |
+| `solve-failed`, `server-error` | A solve or a request failed unexpectedly; the server log has the details under the reference given |
+| `database-unavailable` | The server started without its database |
+
+Each alert is sent at most once per `ALERT_COOLDOWN_S` (30 minutes) for the same event and day, so an
+outage gives one alert, not hundreds. Alerts carry counts, farm codes and dates, never phone numbers or
+message texts. `POST /api/alerts/test` (with the API key) sends a test alert; `/api/health` shows where
+alerts go (`ntfy`, `slack`, `discord`, `webhook` or `off`), never the URL.
+
+A server that is down or asleep cannot send anything. The daily-dispatch GitHub workflow covers that:
+it fails when the server does not answer, the dispatch fails or any SMS is not sent, and GitHub emails
+the repository owner about failed scheduled runs.
+
 ## Economics
 
 The home page's economics section values SunShift for one feeder. Energy and water come from the day's
@@ -349,11 +384,12 @@ All savings shown are comparisons between strategies on this simulated feeder. N
 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
-| GET  | `/api/health` | Engine, library versions, database and registry status, solver queue, default plan date |
+| GET  | `/api/health` | Engine, library versions, database and registry status, solver queue, default plan date, where alerts go, the daily dispatch times |
 | GET  | `/api/scenario` | The feeder scenario (farms, crops, soils, locations), from the registry |
 | GET  | `/api/ml` | The ML model card: data, training and test periods, held-out metrics, backtest, limitations |
 | POST | `/api/dispatch` | Plan the day and text every opted-in farmer (`dryRun`, `farms`, `date` and `onlyIfNew` optional). Never texts the same schedule twice; `409` while another dispatch for that day runs. Needs `X-API-Key` |
 | POST | `/api/sms/inbound` | Farmers' replies (Twilio webhook, signature checked; simulated mode needs `X-API-Key`) |
+| POST | `/api/alerts/test` | Send a test alert to `ALERT_WEBHOOK_URL`. Needs `X-API-Key` |
 | POST | `/api/messaging/webhook` | Structured farmer commands: `CONFIRM`, `SKIP`, or `DELAY` with `delaySlots`. Re-plans the day and returns the new schedule. Needs `X-API-Key` |
 | GET  | `/api/messages` | Recent messages, without phone numbers |
 | POST | `/api/jobs` | Queue a solve: `{"kind": ..., "params": {...}}` with kind `plan`, `sensitivity`, `fairness` or `rain-event`. Returns 202 and a job to poll, or 200 with the result when an identical request was just solved |
@@ -400,6 +436,7 @@ backend/migrations/       Alembic migrations, applied at startup
 backend/app/ml/           ML weather corrections: features, data fetch, training (train.py), runtime, artifacts/
 backend/app/messaging.py  farmer SMS: wording in three languages, gateways (simulated, Twilio), replies
 backend/app/scheduler.py  the daily dispatch at DISPATCH_TIMES
+backend/app/alerts.py     operator alerts (ntfy, Slack, Discord, any webhook)
 docs/DEMO_SCRIPT.md       the demo video script, timed to /demo
 backend/tests/            pytest suite (engine, API on SQLite and PostgreSQL, engine parity)
 frontend/src/sections/    the story site, one file per section

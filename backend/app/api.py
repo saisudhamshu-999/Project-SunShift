@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pydantic.alias_generators import to_camel
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
-from . import db, messaging, registry
+from . import alerts, db, messaging, registry
 from .engine import planner, season
 from .engine.scenario import load_scenario, window_label
 from .engine.weather import apply_mode
@@ -337,6 +337,8 @@ def health(request: Request) -> dict:
         "registry": sc.registry,
         "ml": ml_models.status(),
         "jobs": _jobs(request).stats(),
+        "alerts": alerts.kind(),
+        "dailyDispatch": request.app.state.settings.dispatch_times,
         "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "defaultPlanDate": planner.default_plan_date(),
     }
@@ -528,6 +530,28 @@ class DispatchRequest(_Model):
     only_if_new: bool = False
 
 
+def _alert_on_send(out: dict[str, Any], day: str, what: str) -> None:
+    """Tell the operator when farmers' messages did not go out (farm codes only, no numbers)."""
+    failed = [m["code"] for m in out["messages"] if m["status"] == "failed"]
+    if failed:
+        alerts.alert("sms-failed", f"SunShift: {len(failed)} SMS not sent",
+                     f"The {what} for {day} could not be sent to {', '.join(failed)}. Check the SMS provider "
+                     "(Twilio balance, sender number, DLT templates) and these farmers' numbers.",
+                     key=f"{what}:{day}", details={"date": day, "farms": failed})
+
+
+def _alert_on_weather(plan: dict[str, Any], day: str) -> None:
+    """A dispatched plan inside the forecast horizon should rest on a live forecast."""
+    src = plan["meta"]["sources"]["weather"]
+    offset = (datetime.fromisoformat(day).date() - planner.ist_now().date()).days
+    if src != "live" and -1 <= offset <= 3:
+        what = "an older cached forecast" if src == "cached" else "monthly climatology"
+        alerts.alert("weather-fallback", "SunShift: planned without a live forecast",
+                     f"The plan sent to farmers for {day} used {what}, because the Open-Meteo forecast "
+                     "could not be fetched. Rain and solar may be off; farmers were still messaged.",
+                     key=day, priority="default", details={"date": day, "source": src})
+
+
 async def dispatch_day(app: FastAPI, day: str, *, feeder: str | None = None, farms: list[int] | None = None,
                        dry_run: bool = False, only_if_new: bool = False) -> dict[str, Any]:
     """Plan ``day`` and text every opted-in farmer their window.
@@ -546,6 +570,9 @@ async def dispatch_day(app: FastAPI, day: str, *, feeder: str | None = None, far
                                      time_cap=bg)
         out = await run_in_threadpool(messaging.send_plan, plan, app.state.gateway,
                                       only=set(farms) if farms else None, dry_run=dry_run)
+        if not dry_run:
+            _alert_on_send(out, day, "morning message")
+            _alert_on_weather(plan, day)
         return {"status": "dispatched", **out}
 
 
@@ -558,6 +585,16 @@ async def dispatch(body: DispatchRequest, request: Request) -> dict:
     if out["status"] == "busy":
         raise HTTPException(status_code=409, detail="A dispatch for this feeder and day is already running")
     return out
+
+
+@router.post("/alerts/test", dependencies=[Depends(require_api_key)])
+def send_test_alert() -> dict:
+    """Send a test alert to ALERT_WEBHOOK_URL, to check that alerts reach the operator."""
+    if not alerts.enabled():
+        raise HTTPException(status_code=409, detail="Alerts are off on this server: set ALERT_WEBHOOK_URL")
+    alerts.alert("test", "SunShift: test alert", "Alerts from this server reach you. Nothing is wrong.",
+                 key=uuid.uuid4().hex, priority="default")
+    return {"queued": True, "to": alerts.kind()}
 
 
 @router.get("/messages")
@@ -599,6 +636,10 @@ async def replan_day(app, day: str, reason: str) -> dict[str, Any] | None:
     async with distributed_job_lock_async(f"replan:{feeder_id}:{day}", wait_s=120) as got:
         if not got:
             log.warning("re-plan for %s (%s) skipped: another re-plan held the lock for 2 minutes", day, reason)
+            alerts.alert("replan-failed", "SunShift: a farmer's change was not re-planned",
+                         f"The re-plan for {day} ({reason}) waited 2 minutes for another re-plan and gave up. "
+                         "The farmer's change is saved and applies to the next plan; other farmers were not told.",
+                         key=day)
             return None
         sent = messaging.latest_dispatch(day)
         before = dict(sent.schedule) if sent else {}
@@ -615,10 +656,14 @@ async def replan_day(app, day: str, reason: str) -> dict[str, Any] | None:
             job = await jobs.wait(job["id"], timeout_s=90) or job
         if job["status"] != "done":
             log.warning("re-plan (%s) did not finish: %s", reason, job.get("error"))
+            alerts.alert("replan-failed", "SunShift: a farmer's change was not re-planned",
+                         f"The re-plan for {day} ({reason}) did not finish ({job['status']}). The farmer's change "
+                         "is saved and applies to the next plan; other farmers were not told.", key=day)
             return None
         plan = job["result"]
         out = await run_in_threadpool(messaging.send_plan, plan, app.state.gateway, reason=reason,
                                       updates_from=before if sent else None)
+        _alert_on_send(out, day, "schedule update")
         moved = sorted(f["code"] for f in plan["farms"] if before.get(str(f["id"]), []) != f["schedule"]["slots"])
         return {"plan": plan, "sent": out, "before": before, "moved": moved}
 
@@ -626,8 +671,11 @@ async def replan_day(app, day: str, reason: str) -> dict[str, Any] | None:
 async def _replan_in_background(app, day: str, reason: str) -> None:
     try:
         await replan_day(app, day, reason)
-    except Exception:
+    except Exception as exc:
         log.exception("re-plan (%s) failed", reason)
+        alerts.alert("replan-failed", "SunShift: a farmer's change was not re-planned",
+                     f"The re-plan for {day} ({reason}) failed with {type(exc).__name__}; the details are in the "
+                     "server log. The farmer's change is saved and applies to the next plan.", key=day)
 
 
 @router.post("/sms/inbound")

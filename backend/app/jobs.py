@@ -27,7 +27,7 @@ from typing import Any, AsyncIterator, Callable, Iterator
 
 from sqlalchemy import select, text
 
-from . import db
+from . import alerts, db
 
 log = logging.getLogger("sunshift.jobs")
 
@@ -197,6 +197,8 @@ class JobManager:
         except Exception:
             ref = uuid.uuid4().hex[:8]
             log.exception("job %s failed (ref %s)", job_id, ref)
+            alerts.alert("solve-failed", "SunShift: a solve failed",
+                         f"Job {job_id} failed with an error (ref {ref}); the details are in the server log.")
             self._store_update(job_id, status="failed", finished_at=db.utcnow(), error=f"{GENERIC_ERROR} (ref {ref})")
             self._failed += 1
             return None

@@ -17,6 +17,10 @@ services:
       # needs the daily-dispatch GitHub workflow instead (see backend/app/scheduler.py).
       - key: DISPATCH_TIMES
         value: "05:30"
+      # Where operator alerts go, e.g. https://ntfy.sh/<an unguessable topic>. Render asks
+      # for it when the Blueprint is created; leave it empty to turn alerts off.
+      - key: ALERT_WEBHOOK_URL
+        sync: false
 
 databases:
   - name: sunshift-db

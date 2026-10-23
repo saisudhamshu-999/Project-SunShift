@@ -3,6 +3,8 @@ name: Daily dispatch
 # Asks the deployed server to text farmers the day's plan each morning. Needed where the
 # server sleeps when idle (Render's free tier) and cannot run its own DISPATCH_TIMES
 # schedule; harmless alongside it, because the request only dispatches a day once.
+# It is also the alert of last resort: when the server is down, the dispatch fails or any
+# SMS is not sent, the run fails and GitHub emails you (a server that is down cannot).
 # Does nothing until the SUNSHIFT_URL and SUNSHIFT_API_KEY repository secrets are set.
 
 on:
@@ -34,6 +36,15 @@ jobs:
           done
           code=$(curl -sS -o response.json -w '%{http_code}' --max-time 300 -X POST "$url/api/dispatch" \
             -H "X-API-Key: $SUNSHIFT_API_KEY" -H "content-type: application/json" -d '{"onlyIfNew": true}')
-          cat response.json; echo
-          # 409: another trigger is dispatching this day right now, which is fine.
-          [ "$code" = 200 ] || [ "$code" = 409 ]
+          jq '{status, date, counts}' response.json 2>/dev/null || cat response.json; echo
+          # A failed run is the alert: GitHub emails the repository owner. 409 means another
+          # trigger is dispatching this day right now, which is fine.
+          if [ "$code" != 200 ] && [ "$code" != 409 ]; then
+            echo "::error::The dispatch did not succeed (HTTP $code): farmers have not been told their pump times."
+            exit 1
+          fi
+          failed=$(jq -r '.counts.failed // 0' response.json 2>/dev/null || echo 0)
+          if [ "$failed" != 0 ]; then
+            echo "::error::$failed farmers' messages were not sent; see the server's message log on /app."
+            exit 1
+          fi
